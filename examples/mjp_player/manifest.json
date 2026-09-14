@@ -1,0 +1,6 @@
+{
+  "id": "mjpplayer",
+  "title": "MJPMOVIE",
+  "entry": "main.py",
+  "api": 2
+}

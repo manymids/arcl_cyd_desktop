@@ -1,0 +1,36 @@
+{
+  "name": "cyd-desktop-mcp-bridge",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node bridge/index.mjs",
+    "deploy": "node bridge/deploy.mjs",
+    "docs:tools": "node bridge/mcp-tools-doc.mjs",
+    "package:firmware": "node tools/package-firmware.mjs",
+    "test": "node --test bridge/*.test.mjs tools/*.test.mjs",
+    "test:native": "wsl bash tools/run-native-tests.sh",
+    "integration": "node bridge/integration.mjs",
+    "integration:p13": "node bridge/p13-arcl-smoke.mjs",
+    "integration:p14": "node bridge/p14-canvas-smoke.mjs",
+    "benchmark:transition": "node bridge/p15-transition-benchmark.mjs",
+    "benchmark:neon": "node bridge/p16-neon-benchmark.mjs",
+    "integration:native": "node bridge/p17-native-smoke.mjs",
+    "integration:game": "node bridge/p19-game-smoke.mjs",
+    "integration:mcp": "node bridge/p13-mcp-smoke.mjs",
+    "install:neon": "node bridge/deploy.mjs examples/neon_pulse --pin --launch",
+    "install:canvas": "node bridge/deploy.mjs examples/canvas_fx --launch",
+    "install:game": "node bridge/deploy.mjs examples/pixel_barrage --launch",
+    "install:movie": "node bridge/deploy.mjs examples/mjp_player --launch",
+    "install:console": "node bridge/deploy.mjs examples/console --pin --launch",
+    "update:movie": "node bridge/deploy.mjs examples/mjp_player",
+    "upload:movie": "node bridge/deploy.mjs --app mjpplayer --fast --asset",
+    "integration:movie": "node bridge/p20-mjp-smoke.mjs",
+    "test:rtc": "node bridge/test-settings-rtc.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "serialport": "^13.0.0",
+    "zod": "^3.0.0"
+  }
+}

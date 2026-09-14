@@ -1,0 +1,16 @@
+.pio/
+.platformio/
+.venv/
+__pycache__/
+*.pyc
+*.log
+tools/cache/
+firmware/esp-idf/
+firmware/.idf-tools/
+firmware/build*/
+node_modules/
+# Build output copied to the repository root, and release packages.
+/micropython.bin
+/bootloader.bin
+/partition-table.bin
+/dist/

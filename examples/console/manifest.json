@@ -1,0 +1,7 @@
+{
+  "id": "console",
+  "title": "CONSOLE",
+  "entry": "main.py",
+  "api": 4,
+  "version": "0.0.1"
+}

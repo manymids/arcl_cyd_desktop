@@ -1,0 +1,12 @@
+# Text is stored and checked out with LF on every platform, whatever
+# core.autocrlf says, so shell scripts run in WSL and diffs do not churn.
+* text=auto eol=lf
+*.sh text eol=lf
+
+# Firmware images and media.
+*.bin binary
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.mjp binary
+*.mjpg binary

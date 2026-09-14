@@ -1,0 +1,7 @@
+# 4 MiB flash with a 3 MiB app partition (Bluedroid needs the room).
+# nvs and phy_init keep the offsets of MicroPython's partitions-4MiB.csv, so
+# touch calibration and settings survive the move from older firmware.
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     0x9000,  0x6000,
+phy_init, data, phy,     0xf000,  0x1000,
+factory,  app,  factory, 0x10000, 0x300000,

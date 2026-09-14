@@ -1,0 +1,29 @@
+{
+  "comment": "Shared cases for the manifest.json schema. Checked against firmware/cyd_desktop_board/modules/_manifest.py by manifest_test.py and against bridge/manifest.mjs by bridge/manifest.test.mjs. A failing case names the field the error must start with.",
+  "api_level": 4,
+  "cases": [
+    {"name": "no manifest uses the app id and main.py", "app_id": "weather", "manifest": null, "ok": true, "title": "weather", "entry": "main.py"},
+    {"name": "no manifest truncates a long app id to a title", "app_id": "a_rather_long_app_name", "manifest": null, "ok": true, "title": "a_rather_lon", "entry": "main.py"},
+    {"name": "title alone is enough", "app_id": "clock2", "manifest": {"title": "CLOCK 2"}, "ok": true, "title": "CLOCK 2", "entry": "main.py"},
+    {"name": "every field", "app_id": "pixelstorm", "manifest": {"id": "pixelstorm", "title": "PIXELSTORM", "entry": "game.py", "api": 2, "version": "1.0.0"}, "ok": true, "title": "PIXELSTORM", "entry": "game.py"},
+    {"name": "api 1 is accepted", "app_id": "canvasfx", "manifest": {"title": "CANVASFX", "api": 1}, "ok": true, "title": "CANVASFX", "entry": "main.py"},
+
+    {"name": "manifest must be an object", "app_id": "x", "manifest": ["title"], "ok": false, "field": "shape"},
+    {"name": "a typo in a key is reported", "app_id": "x", "manifest": {"tittle": "X"}, "ok": false, "field": "key"},
+    {"name": "id must match the directory", "app_id": "weather", "manifest": {"id": "forecast", "title": "WEATHER"}, "ok": false, "field": "id"},
+    {"name": "title is required", "app_id": "x", "manifest": {"entry": "main.py"}, "ok": false, "field": "title"},
+    {"name": "title longer than 12", "app_id": "x", "manifest": {"title": "THIRTEEN CHRS"}, "ok": false, "field": "title"},
+    {"name": "title with a disallowed character", "app_id": "x", "manifest": {"title": "WEATHER!"}, "ok": false, "field": "title"},
+    {"name": "title must be a string", "app_id": "x", "manifest": {"title": 7}, "ok": false, "field": "title"},
+    {"name": "entry must be a python file", "app_id": "x", "manifest": {"title": "X", "entry": "main.txt"}, "ok": false, "field": "entry"},
+    {"name": "entry cannot name a subdirectory", "app_id": "x", "manifest": {"title": "X", "entry": "src/main.py"}, "ok": false, "field": "entry"},
+    {"name": "entry cannot escape the app", "app_id": "x", "manifest": {"title": "X", "entry": "..py"}, "ok": false, "field": "entry"},
+    {"name": "api zero", "app_id": "x", "manifest": {"title": "X", "api": 0}, "ok": false, "field": "api"},
+    {"name": "api as a string", "app_id": "x", "manifest": {"title": "X", "api": "2"}, "ok": false, "field": "api"},
+    {"name": "api as a boolean", "app_id": "x", "manifest": {"title": "X", "api": true}, "ok": false, "field": "api"},
+    {"name": "api newer than the firmware", "app_id": "x", "manifest": {"title": "X", "api": 5}, "ok": false, "field": "api"},
+    {"name": "empty version", "app_id": "x", "manifest": {"title": "X", "version": ""}, "ok": false, "field": "version"},
+    {"name": "version of exactly 16 characters", "app_id": "x", "manifest": {"title": "X", "version": "1.0.0-beta.12345"}, "ok": true, "title": "X", "entry": "main.py"},
+    {"name": "version longer than 16", "app_id": "x", "manifest": {"title": "X", "version": "1.0.0-beta.123456"}, "ok": false, "field": "version"}
+  ]
+}
