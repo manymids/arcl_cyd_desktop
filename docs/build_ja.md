@@ -3,7 +3,7 @@
 [English](build_en.md) | 日本語
 
 Windows に WSL（Ubuntu 24.04）を用意し、ESP-IDF を導入して、このリポジトリに同梱した MicroPython からファームウェアをビルドし、Windows 側から書き込むまでの手順です。
-すでに環境がある場合の増分ビルドと書き込みは、[プロジェクトREADME](../README_ja.md) の「ファームウェアのビルドと書込み」を参照してください。
+すでに環境がある場合の増分ビルドと書き込みは、[プロジェクトREADME](../README.md) の「ファームウェアのビルドと書込み」を参照してください。
 
 ## バージョンを固定する理由
 
@@ -75,7 +75,7 @@ idf.py -D MICROPY_BOARD=cyd_desktop_board \
   -B build-cyd_desktop_board build
 ```
 
-2 回目以降は、`-D` の指定はビルドディレクトリに記録されているので、[プロジェクトREADME](../README_ja.md) の増分ビルドのコマンドで足ります。ボード定義（`mpconfigboard.cmake` や `sdkconfig.bt`）を変えたときは、`firmware/micropython/ports/esp32/build-cyd_desktop_board/sdkconfig` を消してから実行してください。ビルドディレクトリは MicroPython の `.gitignore` の対象なので、サブモジュールは変更扱いになりません。
+2 回目以降は、`-D` の指定はビルドディレクトリに記録されているので、[プロジェクトREADME](../README.md) の増分ビルドのコマンドで足ります。ボード定義（`mpconfigboard.cmake` や `sdkconfig.bt`）を変えたときは、`firmware/micropython/ports/esp32/build-cyd_desktop_board/sdkconfig` を消してから実行してください。ビルドディレクトリは MicroPython の `.gitignore` の対象なので、サブモジュールは変更扱いになりません。
 
 Windows のドライブ上でのビルドは、WSL のホーム上より遅くなります（初回はおおむね数分〜十数分）。
 
@@ -88,7 +88,7 @@ wsl -d Ubuntu-24.04 -e bash -c 'b=firmware/micropython/ports/esp32/build-cyd_des
 python -m esptool --port COM6 --before default_reset write_flash 0x1000 bootloader.bin 0x8000 partition-table.bin 0x10000 micropython.bin
 ```
 
-`COM6` は実際のポートに置き換えてください。初回起動では、タッチ補正の十字が 3 か所に順に表示されるので、それぞれの中心をタップします（[対応ハードウェア](../README_ja.md#対応ハードウェア)）。
+`COM6` は実際のポートに置き換えてください。初回起動では、タッチ補正の十字が 3 か所に順に表示されるので、それぞれの中心をタップします（[対応ハードウェア](../README.md#対応ハードウェア)）。
 
 ## 5. テスト
 

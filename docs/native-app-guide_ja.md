@@ -100,7 +100,7 @@ const NativeApp &bounce_app();          // 追加
 
 ### 2.4 ビルドと書き込み
 
-[プロジェクト README](../README_ja.md) の「ファームウェアのビルドと書込み」の手順どおりです（WSL の ESP-IDF でビルドし、Windows から esptool で書き込む）。
+[プロジェクト README](../README.md) の「ファームウェアのビルドと書込み」の手順どおりです（WSL の ESP-IDF でビルドし、Windows から esptool で書き込む）。
 **`pio run` は使わないでください**。別のファームウェアがビルドされます。
 
 ---

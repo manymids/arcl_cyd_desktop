@@ -1,6 +1,6 @@
 # ARCL CYD Desktop
 
-English | [日本語](README_ja.md)
+English | [日本語](README.md)
 
 A small desktop environment for the ESP32-2432S028 CYD. Use the touchscreen,
 USB serial or MCP to inspect state, launch apps, send input and transfer files.
