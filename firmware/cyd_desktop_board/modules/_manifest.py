@@ -23,7 +23,7 @@ import json
 # Bump when cyd gains functions an app may depend on. An app whose manifest asks
 # for a higher level is refused instead of failing halfway through with an
 # AttributeError.
-API_LEVEL = 5
+API_LEVEL = 6
 
 MAX_BYTES = 2048
 KEYS = ("id", "title", "entry", "api", "version")

@@ -93,6 +93,32 @@ void scrolls_the_map_and_draws_sprites() {
     assert(at(row0, 22, 0) == kSky);        // flipped: the transparent half
     assert(at(row0, 44, 0) == kRed);        // behind, but over open sky
 
+    // Vertical scroll: 16 px up brings row 1 (all stone) to the screen row of row 0.
+    tiles::frame(8, 16);
+    tiles::commit();
+    row0 = render_band(16);
+    assert(at(row0, 100, 0) == kStone);
+    auto below = render_band(32);
+    assert(at(below, 100, 0) == kSky);      // past the bottom of the map
+
+    // Rectangles: fill, 2 px border, cut corners, removal.
+    tiles::frame(0, 0);
+    assert(tiles::rect(0, 10, 100, 20, 10, 2, 1));
+    assert(!tiles::rect(8, 0, 0, 1, 1, 0, -1));
+    assert(tiles::text(15, 0, 0, "", 1, 1));
+    assert(!tiles::text(16, 0, 0, "X", 1, 1));
+    tiles::commit();
+    auto band = render_band(96);
+    assert(at(band, 10, 4) == kSky);        // cut corner
+    assert(at(band, 11, 4) == kStone);      // border
+    assert(at(band, 11, 5) == kStone);
+    assert(at(band, 15, 8) == kRed);        // fill
+    assert(at(band, 30, 8) == kSky);        // right of it
+    assert(tiles::rect(0, 10, 100, 0, 10, 2, 1));
+    tiles::commit();
+    band = render_band(96);
+    assert(at(band, 15, 8) == kSky);
+
     tiles::end();
     assert(!tiles::ready());
 }

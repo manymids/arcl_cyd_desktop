@@ -15,6 +15,7 @@ from _cyd_shell import (app_button, app_clear, app_event, app_log, app_primitive
                           jpeg_present as _jpeg_present, jpeg_file as _jpeg_file,
                           tile_begin as _tile_begin, tile_end as _tile_end, tile_palette as _tile_palette,
                           tile_frame as _tile_frame, tile_sprite as _tile_sprite, tile_text as _tile_text,
+                          tile_rect as _tile_rect,
                           tile_present as _tile_present, keys_down as _keys_down)
 from _manifest import API_LEVEL
 
@@ -203,9 +204,12 @@ def tile_palette(palette):
     if result != 0:
         raise ValueError("tile_palette: " + _TILE_ERRORS.get(result, str(result)))
 
-def tile_frame(scroll_x):
-    """Start the next frame: scroll the map to world x and drop the sprites."""
-    _tile_frame(scroll_x)
+def tile_frame(scroll_x, scroll_y=0):
+    """Start the next frame: scroll the map to world (x, y) and drop the sprites.
+
+    scroll_y needs API level 6.
+    """
+    _tile_frame(scroll_x, scroll_y)
 
 def tile_sprite(cell, x, y, flags=0):
     """Add a sprite cell at screen (x, y); at most 64 a frame.
@@ -215,8 +219,18 @@ def tile_sprite(cell, x, y, flags=0):
     return _tile_sprite(cell, x, y, flags)
 
 def tile_text(slot, x, y, value, color=1, scale=1):
-    """Set text slot 0-7 (32 characters, palette 0 colour); "" removes it. Kept across frames."""
+    """Set text slot 0-15 (0-7 before API level 6; 32 characters, palette 0
+    colour); "" removes it. Kept across frames."""
     return _tile_text(int(slot), int(x), int(y), str(value), int(color), int(scale))
+
+def tile_rect(slot, x, y, width, height, fill=0, border=-1):
+    """Set rectangle slot 0-7 over the sprites and under the text (API level 6).
+
+    fill and border are palette 0 colours; border -1 draws none, otherwise a
+    2 pixel border with cut corners. Width or height 0 removes it. Kept across
+    frames.
+    """
+    return _tile_rect(int(slot), int(x), int(y), int(width), int(height), int(fill), int(border))
 
 def tile_present():
     """Show the frame. False once the tile view has left the screen."""

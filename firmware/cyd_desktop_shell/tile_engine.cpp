@@ -27,10 +27,21 @@ struct Text {
     char value[kTextLength + 1];
 };
 
+struct Rect {
+    int16_t x;
+    int16_t y;
+    int16_t width;
+    int16_t height;
+    int8_t fill;
+    int8_t border;
+};
+
 struct FrameState {
     int scroll_x;
+    int scroll_y;
     uint8_t sprite_count;
     Sprite sprites[kSpriteCapacity];
+    Rect rects[kRectCapacity];
     Text texts[kTextCapacity];
 };
 
@@ -72,7 +83,7 @@ inline uint8_t nibble(const uint8_t *row, int column) {
 
 // The palette-0 index the map shows at a world pixel; 0 outside the map.
 uint8_t map_pixel(int world_x, int screen_y) {
-    const int map_y = screen_y - scene.origin_y;
+    const int map_y = screen_y - scene.origin_y + shown.scroll_y;
     if (world_x < 0 || map_y < 0) return 0;
     const int column = world_x >> 4;
     const int row = map_y >> 4;
@@ -84,7 +95,7 @@ uint8_t map_pixel(int world_x, int screen_y) {
 
 void render_map_row(uint16_t *destination, int width, int screen_y) {
     const uint16_t background = scene.palette[0];
-    const int map_y = screen_y - scene.origin_y;
+    const int map_y = screen_y - scene.origin_y + shown.scroll_y;
     if (map_y < 0 || map_y >= scene.map_height * kCell) {
         std::fill(destination, destination + width, background);
         return;
@@ -131,6 +142,31 @@ void render_sprite(const native::TileSurface &surface, const Sprite &sprite) {
     }
 }
 
+void render_rect(const native::TileSurface &surface, const Rect &rect) {
+    const int top = std::max(static_cast<int>(rect.y), surface.origin_y);
+    const int bottom = std::min(rect.y + rect.height, surface.origin_y + surface.height);
+    const int left = std::max(0, static_cast<int>(rect.x));
+    const int right = std::min(surface.width, rect.x + rect.width);
+    if (top >= bottom || left >= right) return;
+    const uint16_t fill = scene.palette[rect.fill % kPaletteColors];
+    const uint16_t border = rect.border < 0 ? fill : scene.palette[rect.border % kPaletteColors];
+    const int has_border = rect.border >= 0;
+    for (int y = top; y < bottom; ++y) {
+        uint16_t *row = surface.pixels + static_cast<std::size_t>(y - surface.origin_y) * surface.stride;
+        const int from_top = y - rect.y;
+        const int from_bottom = rect.y + rect.height - 1 - y;
+        const bool edge_row = has_border && (from_top < 2 || from_bottom < 2);
+        const bool corner_row = has_border && (from_top == 0 || from_bottom == 0);
+        for (int x = left; x < right; ++x) {
+            const int from_left = x - rect.x;
+            const int from_right = rect.x + rect.width - 1 - x;
+            if (corner_row && (from_left == 0 || from_right == 0)) continue;  // cut corners
+            const bool edge = edge_row || (has_border && (from_left < 2 || from_right < 2));
+            row[x] = edge ? border : fill;
+        }
+    }
+}
+
 void render_text(const native::TileSurface &surface, const Text &text) {
     const int scale = text.scale;
     if (text.y + 7 * scale <= surface.origin_y || text.y >= surface.origin_y + surface.height) return;
@@ -163,7 +199,7 @@ int begin(const uint8_t *palette, std::size_t palette_size,
         sprites_size / kCellBytes > 65535) return kBadSprites;
     if (map == nullptr || map_width <= 0 || map_height <= 0 || map_height > kMaxMapHeight ||
         map_width > 4096 || map_size < static_cast<std::size_t>(map_width) * map_height ||
-        origin_y < -kMaxMapHeight * kCell || origin_y > 240) return kBadMap;
+        origin_y < -240 || origin_y > 240) return kBadMap;
     const int palette_result = adopt_palette(palette, palette_size, 0);
     if (palette_result != kOk) return palette_result;
     scene.tiles = tile_data;
@@ -192,8 +228,9 @@ int set_palette(const uint8_t *palette, std::size_t palette_size) {
     return adopt_palette(palette, palette_size, scene.palette_count);
 }
 
-void frame(int scroll_x) {
+void frame(int scroll_x, int scroll_y) {
     pending.scroll_x = scroll_x;
+    pending.scroll_y = scroll_y;
     pending.sprite_count = 0;
 }
 
@@ -219,6 +256,18 @@ bool text(int slot, int x, int y, const char *value, uint8_t color, int scale) {
     return true;
 }
 
+bool rect(int slot, int x, int y, int width, int height, int fill, int border) {
+    if (slot < 0 || slot >= kRectCapacity) return false;
+    Rect &entry = pending.rects[slot];
+    entry.x = static_cast<int16_t>(std::max(-320, std::min(640, x)));
+    entry.y = static_cast<int16_t>(std::max(-240, std::min(480, y)));
+    entry.width = static_cast<int16_t>(std::max(0, std::min(640, width)));
+    entry.height = static_cast<int16_t>(std::max(0, std::min(480, height)));
+    entry.fill = static_cast<int8_t>(((fill % kPaletteColors) + kPaletteColors) % kPaletteColors);
+    entry.border = static_cast<int8_t>(border < 0 ? -1 : border % kPaletteColors);
+    return true;
+}
+
 void commit() { shown = pending; }
 
 void render(const native::TileSurface &surface) {
@@ -231,6 +280,9 @@ void render(const native::TileSurface &surface) {
                        surface.width, surface.origin_y + row);
     }
     for (uint8_t index = 0; index < shown.sprite_count; ++index) render_sprite(surface, shown.sprites[index]);
+    for (const Rect &entry : shown.rects) {
+        if (entry.width > 0 && entry.height > 0) render_rect(surface, entry);
+    }
     for (const Text &entry : shown.texts) {
         if (entry.value[0] != '\0') render_text(surface, entry);
     }

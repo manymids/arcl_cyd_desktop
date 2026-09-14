@@ -160,7 +160,7 @@ which starts at y = 212. Colors are RGB565 integers; use `cyd.rgb()` to create t
 
 | Name | Value |
 | --- | --- |
-| `cyd.API_LEVEL` | API level supplied by the firmware; currently 5 |
+| `cyd.API_LEVEL` | API level supplied by the firmware; currently 6 |
 | `cyd.BLACK` `cyd.NAVY` `cyd.BLUE` `cyd.GREEN` `cyd.CYAN` `cyd.RED` `cyd.MAGENTA` `cyd.ORANGE` `cyd.YELLOW` `cyd.WHITE` | RGB565 colors |
 | `cyd.GAME_PLAYER` `cyd.GAME_ENEMY` `cyd.GAME_BULLET` `cyd.GAME_SHOT` `cyd.GAME_SPARK` | Sprite kinds, 0–4 |
 | `cyd.TILE_FLIP_X` `cyd.TILE_FLIP_Y` `cyd.TILE_BEHIND` | `cyd.tile_sprite()` flags (1, 2, 4) |
@@ -270,25 +270,33 @@ resize them.
 
 Switch to the tile map view. `palette` holds 1–4 palettes of 16 big-endian RGB565 colours (32 bytes each).
 Tiles use palette 0 and tile 0 is empty (painted with palette 0, colour 0). In `sprites` cells colour 0 is
-transparent. `tilemap` is `width`×`height` (height up to 32) tile numbers row by row, drawn from screen row
+transparent. `tilemap` is `width`×`height` (height up to 255; 32 at API level 5) tile numbers row by row, drawn from screen row
 `origin_y`. Bad arguments raise `ValueError`. Call it again to swap the buffers for another scene.
 
 #### `cyd.tile_palette(palette)`
 
 Replace the palettes; the number of palettes must match `tile_begin()`.
 
-#### `cyd.tile_frame(scroll_x)`
+#### `cyd.tile_frame(scroll_x, scroll_y=0)`
 
-Start the next frame: scroll the map `scroll_x` pixels and drop the sprites.
+Start the next frame: scroll the map `scroll_x` and `scroll_y` pixels and drop the sprites. `scroll_y` needs
+API level 6.
 
 #### `cyd.tile_sprite(cell, x, y, flags=0)` → `bool`
 
 Place a sprite cell at screen coordinates; at most 64 a frame. `flags` combines `cyd.TILE_FLIP_X`,
 `cyd.TILE_FLIP_Y` and `cyd.TILE_BEHIND` (not drawn where the map is not colour 0), plus the palette number × 16.
 
+#### `cyd.tile_rect(slot, x, y, width, height, fill=0, border=-1)` → `bool`
+
+Put a filled rectangle in one of eight slots (0–7), API level 6 and later. It is drawn over the sprites and
+under the text, for windows and on-screen buttons. `fill` and `border` are palette 0 colours; `border` -1
+draws no border, otherwise a 2-pixel border with cut corners. A width or height of 0 removes it. It stays
+across frames.
+
 #### `cyd.tile_text(slot, x, y, value, color=1, scale=1)` → `bool`
 
-Put text in one of eight slots (0–7): up to 32 characters, colour from palette 0, scale 1–4. It stays across
+Put text in one of sixteen slots (0–15; 0–7 at API level 5): up to 32 characters, colour from palette 0, scale 1–4. It stays across
 frames; `""` removes it.
 
 #### `cyd.tile_present()` → `bool`

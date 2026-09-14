@@ -154,7 +154,7 @@ cyd.run()           # Home / Start / 長押しで抜ける
 
 | 名前 | 値 |
 |---|---|
-| `cyd.API_LEVEL` | ファームウェアが提供する API レベル（現在 5） |
+| `cyd.API_LEVEL` | ファームウェアが提供する API レベル（現在 6） |
 | `cyd.BLACK` `cyd.NAVY` `cyd.BLUE` `cyd.GREEN` `cyd.CYAN` `cyd.RED` `cyd.MAGENTA` `cyd.ORANGE` `cyd.YELLOW` `cyd.WHITE` | RGB565 の色 |
 | `cyd.GAME_PLAYER` `cyd.GAME_ENEMY` `cyd.GAME_BULLET` `cyd.GAME_SHOT` `cyd.GAME_SPARK` | スプライトの種類（0〜4） |
 | `cyd.TILE_FLIP_X` `cyd.TILE_FLIP_Y` `cyd.TILE_BEHIND` | `cyd.tile_sprite()` のフラグ（1、2、4） |
@@ -251,21 +251,27 @@ cyd.run()           # Home / Start / 長押しで抜ける
 タイルマップのビューに切り替えます。
 `palette` はビッグエンディアン RGB565 の 16 色を 1〜4 組（32 バイト単位）。タイルはパレット 0 を使い、
 タイル 0 は空（パレット 0 の色 0 で塗る）です。`sprites` のセルでは色 0 が透明です。
-`tilemap` は `width`×`height`（高さ 32 まで）のタイル番号を行ごとに並べたもので、画面の `origin_y` 行目から描きます。
+`tilemap` は `width`×`height`（高さ 255 まで。API レベル 5 では 32 まで）のタイル番号を行ごとに並べたもので、画面の `origin_y` 行目から描きます。
 不正な引数は `ValueError` です。別の場面へ移るときは、もう一度呼んでバッファを取り替えます。
 
 #### `cyd.tile_palette(palette)`
 パレットを取り替えます。組の数は `tile_begin()` と同じでなければなりません。
 
-#### `cyd.tile_frame(scroll_x)`
-次のフレームを始めます。マップを横に `scroll_x` ピクセルずらし、スプライトを消します。
+#### `cyd.tile_frame(scroll_x, scroll_y=0)`
+次のフレームを始めます。マップを `scroll_x`・`scroll_y` ピクセルずらし、スプライトを消します。
+`scroll_y` は API レベル 6 以降です。
 
 #### `cyd.tile_sprite(cell, x, y, flags=0)` → `bool`
 スプライトのセルを画面座標に置きます。1 フレーム 64 個まで。`flags` は `cyd.TILE_FLIP_X`・`cyd.TILE_FLIP_Y`・
 `cyd.TILE_BEHIND`（マップが色 0 でない所には描かない）の和に、パレット番号×16 を足したものです。
 
+#### `cyd.tile_rect(slot, x, y, width, height, fill=0, border=-1)` → `bool`
+塗りつぶした長方形を 8 個のスロット（0〜7）の 1 つに置きます（API レベル 6 以降）。スプライトの上、文字の下に描かれ、
+ウィンドウや画面上のボタンに使えます。`fill`・`border` はパレット 0 の色番号で、`border` が -1 なら枠なし、
+それ以外は角を落とした 2 ピクセルの枠です。幅か高さが 0 なら消えます。フレームをまたいで残ります。
+
 #### `cyd.tile_text(slot, x, y, value, color=1, scale=1)` → `bool`
-文字列を 8 個のスロット（0〜7）の 1 つに置きます。32 文字まで、色はパレット 0 の番号、倍率は 1〜4。
+文字列を 16 個のスロット（0〜15。API レベル 5 では 0〜7）の 1 つに置きます。32 文字まで、色はパレット 0 の番号、倍率は 1〜4。
 フレームをまたいで残り、`""` で消えます。
 
 #### `cyd.tile_present()` → `bool`

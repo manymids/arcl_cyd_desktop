@@ -35,7 +35,8 @@ extern "C" int cyd_desktop_tile_begin(const uint8_t *palette, size_t palette_siz
                                       int origin_y);
 extern "C" void cyd_desktop_tile_end(void);
 extern "C" int cyd_desktop_tile_palette(const uint8_t *palette, size_t size);
-extern "C" void cyd_desktop_tile_frame(int scroll_x);
+extern "C" void cyd_desktop_tile_frame(int scroll_x, int scroll_y);
+extern "C" bool cyd_desktop_tile_rect(int slot, int x, int y, int width, int height, int fill, int border);
 extern "C" bool cyd_desktop_tile_sprite(int cell, int x, int y, int flags);
 extern "C" bool cyd_desktop_tile_text(int slot, int x, int y, const char *value, int color, int scale);
 extern "C" int cyd_desktop_tile_present(void);
@@ -234,11 +235,18 @@ mp_obj_t tile_palette(mp_obj_t palette) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(tile_palette_obj, tile_palette);
 
-mp_obj_t tile_frame(mp_obj_t scroll_x) {
-    cyd_desktop_tile_frame(mp_obj_get_int(scroll_x));
+mp_obj_t tile_frame(size_t n_args, const mp_obj_t *args) {
+    cyd_desktop_tile_frame(mp_obj_get_int(args[0]), n_args > 1 ? mp_obj_get_int(args[1]) : 0);
     return mp_const_none;
 }
-static MP_DEFINE_CONST_FUN_OBJ_1(tile_frame_obj, tile_frame);
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(tile_frame_obj, 1, 2, tile_frame);
+
+mp_obj_t tile_rect(size_t, const mp_obj_t *args) {
+    return mp_obj_new_bool(cyd_desktop_tile_rect(mp_obj_get_int(args[0]), mp_obj_get_int(args[1]),
+        mp_obj_get_int(args[2]), mp_obj_get_int(args[3]), mp_obj_get_int(args[4]),
+        mp_obj_get_int(args[5]), mp_obj_get_int(args[6])));
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(tile_rect_obj, 7, 7, tile_rect);
 
 mp_obj_t tile_sprite(size_t n_args, const mp_obj_t *args) {
     return mp_obj_new_bool(cyd_desktop_tile_sprite(mp_obj_get_int(args[0]), mp_obj_get_int(args[1]),
@@ -465,6 +473,7 @@ const mp_rom_map_elem_t globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_tile_frame), MP_ROM_PTR(&tile_frame_obj)},
     {MP_ROM_QSTR(MP_QSTR_tile_sprite), MP_ROM_PTR(&tile_sprite_obj)},
     {MP_ROM_QSTR(MP_QSTR_tile_text), MP_ROM_PTR(&tile_text_obj)},
+    {MP_ROM_QSTR(MP_QSTR_tile_rect), MP_ROM_PTR(&tile_rect_obj)},
     {MP_ROM_QSTR(MP_QSTR_tile_present), MP_ROM_PTR(&tile_present_obj)},
     {MP_ROM_QSTR(MP_QSTR_keys_down), MP_ROM_PTR(&keys_down_obj)},
     {MP_ROM_QSTR(MP_QSTR_jpeg_present), MP_ROM_PTR(&jpeg_present_obj)},

@@ -28,9 +28,10 @@ constexpr std::size_t kCellBytes = 128;
 constexpr int kPaletteColors = 16;
 constexpr int kMaxPalettes = 4;
 constexpr int kSpriteCapacity = 64;
-constexpr int kTextCapacity = 8;
+constexpr int kTextCapacity = 16;
+constexpr int kRectCapacity = 8;
 constexpr int kTextLength = 32;
-constexpr int kMaxMapHeight = 32;
+constexpr int kMaxMapHeight = 255;
 
 enum SpriteFlags : uint8_t {
     kFlipX = 1 << 0,
@@ -62,11 +63,15 @@ bool ready();
 // Replaces the palettes; the count must match begin()'s.
 int set_palette(const uint8_t *palette, std::size_t palette_size);
 
-// Pending frame.
-void frame(int scroll_x);
+// Pending frame. The map is scrolled by (scroll_x, scroll_y) pixels.
+void frame(int scroll_x, int scroll_y = 0);
 bool sprite(int cell, int x, int y, uint8_t flags);
 // color indexes palette 0. An empty value removes the text.
 bool text(int slot, int x, int y, const char *value, uint8_t color, int scale);
+// A filled rectangle over the sprites and under the text, for windows and
+// on-screen buttons: palette 0 colours, a 2 px border with cut corners unless
+// border < 0. Width or height 0 removes it. Kept across frames, like text.
+bool rect(int slot, int x, int y, int width, int height, int fill, int border);
 void commit();
 
 // Renders one band of the shown scene.

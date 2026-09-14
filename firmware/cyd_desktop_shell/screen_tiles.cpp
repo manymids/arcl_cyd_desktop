@@ -72,7 +72,11 @@ extern "C" int cyd_desktop_tile_palette(const uint8_t *palette, size_t size) {
     return result;
 }
 
-extern "C" void cyd_desktop_tile_frame(int scroll_x) { tiles::frame(scroll_x); }
+extern "C" void cyd_desktop_tile_frame(int scroll_x, int scroll_y) { tiles::frame(scroll_x, scroll_y); }
+
+extern "C" bool cyd_desktop_tile_rect(int slot, int x, int y, int width, int height, int fill, int border) {
+    return tiles::rect(slot, x, y, width, height, fill, border);
+}
 
 extern "C" bool cyd_desktop_tile_sprite(int cell, int x, int y, int flags) {
     return tiles::sprite(cell, x, y, static_cast<uint8_t>(flags));
