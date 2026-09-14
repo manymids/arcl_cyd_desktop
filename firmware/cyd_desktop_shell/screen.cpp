@@ -348,7 +348,10 @@ void ui_task(void *) {
                 }
             }
         }
-        delay_ms(cyd::desktop::shell_state().snapshot().view == cyd::desktop::View::Native ? 5 : 30);
+        // At least one tick (10 ms at CONFIG_FREERTOS_HZ=100): 5 ms rounds down to
+        // no wait at all, and this task then starves mp_task on the same core,
+        // which runs a script-hosted view and must feed the task watchdog.
+        delay_ms(cyd::desktop::shell_state().snapshot().view == cyd::desktop::View::Native ? 10 : 30);
     }
 }
 
