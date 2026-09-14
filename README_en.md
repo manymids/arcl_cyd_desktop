@@ -1,4 +1,4 @@
-# CYD Desktop Sandbox
+# ARCL CYD Desktop
 
 English | [日本語](README_ja.md)
 
