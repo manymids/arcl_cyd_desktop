@@ -87,6 +87,11 @@ typedef struct {
 // 35 ms interval). Returns false when there is none.
 bool cyd_desktop_bt_key_next(cyd_bt_key_t *out);
 
+// The keys down right now on the connected keyboard, as in its last report: up
+// to six usages written to `usages`, and the modifier byte. Returns the count;
+// 0 with no keyboard connected.
+int cyd_desktop_bt_keys_down(uint8_t usages[6], uint8_t *modifiers);
+
 #ifdef __cplusplus
 }
 #endif

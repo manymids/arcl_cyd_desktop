@@ -28,6 +28,18 @@ extern "C" int cyd_desktop_jpeg_stream(void *user_data,
                                        int (*read_fn)(void *user_data, uint8_t *dest, size_t requested),
                                        int (*seek_fn)(void *user_data, size_t offset),
                                        int x, int y);
+extern "C" int cyd_desktop_tile_begin(const uint8_t *palette, size_t palette_size,
+                                      const uint8_t *tile_data, size_t tiles_size,
+                                      const uint8_t *sprite_data, size_t sprites_size,
+                                      const uint8_t *map, size_t map_size, int map_width, int map_height,
+                                      int origin_y);
+extern "C" void cyd_desktop_tile_end(void);
+extern "C" int cyd_desktop_tile_palette(const uint8_t *palette, size_t size);
+extern "C" void cyd_desktop_tile_frame(int scroll_x);
+extern "C" bool cyd_desktop_tile_sprite(int cell, int x, int y, int flags);
+extern "C" bool cyd_desktop_tile_text(int slot, int x, int y, const char *value, int color, int scale);
+extern "C" int cyd_desktop_tile_present(void);
+extern "C" size_t cyd_desktop_app_keys_down(char names[][12], size_t capacity);
 extern "C" void cyd_desktop_console_begin(void);
 extern "C" void cyd_desktop_console_line(int index, const char *line_text, int color);
 extern "C" void cyd_desktop_console_input(const char *input_text, int cursor_pos, const char *prompt);
@@ -198,6 +210,60 @@ mp_obj_t video_present(mp_obj_t value) {
     return mp_obj_new_int(cyd_desktop_video_present(static_cast<const uint8_t *>(buffer.buf), buffer.len));
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(video_present_obj, video_present);
+
+// tile_begin(palette, tiles, sprites, map, map_width, map_height, origin_y)
+mp_obj_t tile_begin(size_t, const mp_obj_t *args) {
+    mp_buffer_info_t buffers[4]{};
+    for (int index = 0; index < 4; ++index) mp_get_buffer_raise(args[index], &buffers[index], MP_BUFFER_READ);
+    return mp_obj_new_int(cyd_desktop_tile_begin(
+        static_cast<const uint8_t *>(buffers[0].buf), buffers[0].len,
+        static_cast<const uint8_t *>(buffers[1].buf), buffers[1].len,
+        static_cast<const uint8_t *>(buffers[2].buf), buffers[2].len,
+        static_cast<const uint8_t *>(buffers[3].buf), buffers[3].len,
+        mp_obj_get_int(args[4]), mp_obj_get_int(args[5]), mp_obj_get_int(args[6])));
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(tile_begin_obj, 7, 7, tile_begin);
+
+mp_obj_t tile_end() { cyd_desktop_tile_end(); return mp_const_none; }
+static MP_DEFINE_CONST_FUN_OBJ_0(tile_end_obj, tile_end);
+
+mp_obj_t tile_palette(mp_obj_t palette) {
+    mp_buffer_info_t buffer{};
+    mp_get_buffer_raise(palette, &buffer, MP_BUFFER_READ);
+    return mp_obj_new_int(cyd_desktop_tile_palette(static_cast<const uint8_t *>(buffer.buf), buffer.len));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(tile_palette_obj, tile_palette);
+
+mp_obj_t tile_frame(mp_obj_t scroll_x) {
+    cyd_desktop_tile_frame(mp_obj_get_int(scroll_x));
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(tile_frame_obj, tile_frame);
+
+mp_obj_t tile_sprite(size_t n_args, const mp_obj_t *args) {
+    return mp_obj_new_bool(cyd_desktop_tile_sprite(mp_obj_get_int(args[0]), mp_obj_get_int(args[1]),
+        mp_obj_get_int(args[2]), n_args > 3 ? mp_obj_get_int(args[3]) : 0));
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(tile_sprite_obj, 3, 4, tile_sprite);
+
+mp_obj_t tile_text(size_t, const mp_obj_t *args) {
+    return mp_obj_new_bool(cyd_desktop_tile_text(mp_obj_get_int(args[0]), mp_obj_get_int(args[1]),
+        mp_obj_get_int(args[2]), mp_string(args[3]), mp_obj_get_int(args[4]), mp_obj_get_int(args[5])));
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(tile_text_obj, 6, 6, tile_text);
+
+mp_obj_t tile_present() { return mp_obj_new_int(cyd_desktop_tile_present()); }
+static MP_DEFINE_CONST_FUN_OBJ_0(tile_present_obj, tile_present);
+
+mp_obj_t keys_down() {
+    char names[9][12];
+    const size_t count = cyd_desktop_app_keys_down(names, 9);
+    mp_obj_t values[9];
+    for (size_t index = 0; index < count; ++index)
+        values[index] = mp_obj_new_str(names[index], std::strlen(names[index]));
+    return mp_obj_new_tuple(count, values);
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(keys_down_obj, keys_down);
 
 mp_obj_t jpeg_present(size_t n_args, const mp_obj_t *args) {
     mp_buffer_info_t buffer{};
@@ -393,6 +459,14 @@ const mp_rom_map_elem_t globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_game_touch), MP_ROM_PTR(&game_touch_obj)},
     {MP_ROM_QSTR(MP_QSTR_video_begin), MP_ROM_PTR(&video_begin_obj)},
     {MP_ROM_QSTR(MP_QSTR_video_present), MP_ROM_PTR(&video_present_obj)},
+    {MP_ROM_QSTR(MP_QSTR_tile_begin), MP_ROM_PTR(&tile_begin_obj)},
+    {MP_ROM_QSTR(MP_QSTR_tile_end), MP_ROM_PTR(&tile_end_obj)},
+    {MP_ROM_QSTR(MP_QSTR_tile_palette), MP_ROM_PTR(&tile_palette_obj)},
+    {MP_ROM_QSTR(MP_QSTR_tile_frame), MP_ROM_PTR(&tile_frame_obj)},
+    {MP_ROM_QSTR(MP_QSTR_tile_sprite), MP_ROM_PTR(&tile_sprite_obj)},
+    {MP_ROM_QSTR(MP_QSTR_tile_text), MP_ROM_PTR(&tile_text_obj)},
+    {MP_ROM_QSTR(MP_QSTR_tile_present), MP_ROM_PTR(&tile_present_obj)},
+    {MP_ROM_QSTR(MP_QSTR_keys_down), MP_ROM_PTR(&keys_down_obj)},
     {MP_ROM_QSTR(MP_QSTR_jpeg_present), MP_ROM_PTR(&jpeg_present_obj)},
     {MP_ROM_QSTR(MP_QSTR_jpeg_file), MP_ROM_PTR(&jpeg_file_obj)},
     {MP_ROM_QSTR(MP_QSTR_console_begin), MP_ROM_PTR(&console_begin_obj)},

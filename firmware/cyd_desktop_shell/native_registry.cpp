@@ -14,6 +14,7 @@ namespace cyd::desktop::native {
 
 const NativeApp &raycast_demo_app();
 const NativeApp &mjp_player_app();
+const NativeApp &tile_map_app();
 
 namespace {
 
@@ -21,6 +22,7 @@ const NativeApp *const *table(std::size_t &count) {
     static const NativeApp *const apps[] = {
         &raycast_demo_app(),
         &mjp_player_app(),
+        &tile_map_app(),
     };
     count = sizeof(apps) / sizeof(apps[0]);
     return apps;

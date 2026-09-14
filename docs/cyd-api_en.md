@@ -160,9 +160,10 @@ which starts at y = 212. Colors are RGB565 integers; use `cyd.rgb()` to create t
 
 | Name | Value |
 | --- | --- |
-| `cyd.API_LEVEL` | API level supplied by the firmware; currently 4 |
+| `cyd.API_LEVEL` | API level supplied by the firmware; currently 5 |
 | `cyd.BLACK` `cyd.NAVY` `cyd.BLUE` `cyd.GREEN` `cyd.CYAN` `cyd.RED` `cyd.MAGENTA` `cyd.ORANGE` `cyd.YELLOW` `cyd.WHITE` | RGB565 colors |
 | `cyd.GAME_PLAYER` `cyd.GAME_ENEMY` `cyd.GAME_BULLET` `cyd.GAME_SHOT` `cyd.GAME_SPARK` | Sprite kinds, 0–4 |
+| `cyd.TILE_FLIP_X` `cyd.TILE_FLIP_Y` `cyd.TILE_BEHIND` | `cyd.tile_sprite()` flags (1, 2, 4) |
 | `cyd.HTTP_MAX_BYTES` | HTTP response size limit: 32,768 bytes |
 
 ### 3.2 Capacity limits
@@ -254,6 +255,45 @@ Up to 128 sprites can be submitted per frame.
 #### `cyd.touch()` → `(pressed, x, y)`
 
 Return the current physical touch state for low-latency polling in a game loop.
+
+### 5.1 Tile map (API level 5 and later)
+
+For side-scrolling games: a tile map, sprites and text drawn natively over the whole 320×240 panel (the
+taskbar included). Frames are rendered on the MicroPython task that calls `cyd.tile_present()` and sent in
+16-row bands. See `examples/pip_quest`.
+
+All graphics are 16×16 cells at 4 bits per pixel (high nibble on the left), 128 bytes a cell. The buffers
+are used in place, not copied: changing a byte of `tilemap` changes the map from the next frame. Do not
+resize them.
+
+#### `cyd.tile_begin(palette, tiles, sprites, tilemap, width, height, origin_y=0)` → `True`
+
+Switch to the tile map view. `palette` holds 1–4 palettes of 16 big-endian RGB565 colours (32 bytes each).
+Tiles use palette 0 and tile 0 is empty (painted with palette 0, colour 0). In `sprites` cells colour 0 is
+transparent. `tilemap` is `width`×`height` (height up to 32) tile numbers row by row, drawn from screen row
+`origin_y`. Bad arguments raise `ValueError`. Call it again to swap the buffers for another scene.
+
+#### `cyd.tile_palette(palette)`
+
+Replace the palettes; the number of palettes must match `tile_begin()`.
+
+#### `cyd.tile_frame(scroll_x)`
+
+Start the next frame: scroll the map `scroll_x` pixels and drop the sprites.
+
+#### `cyd.tile_sprite(cell, x, y, flags=0)` → `bool`
+
+Place a sprite cell at screen coordinates; at most 64 a frame. `flags` combines `cyd.TILE_FLIP_X`,
+`cyd.TILE_FLIP_Y` and `cyd.TILE_BEHIND` (not drawn where the map is not colour 0), plus the palette number × 16.
+
+#### `cyd.tile_text(slot, x, y, value, color=1, scale=1)` → `bool`
+
+Put text in one of eight slots (0–7): up to 32 characters, colour from palette 0, scale 1–4. It stays across
+frames; `""` removes it.
+
+#### `cyd.tile_present()` → `bool`
+
+Show the frame. `False` once the tile map view is no longer in front (the app should finish).
 
 ## 6. Images and video
 
@@ -354,6 +394,13 @@ Return the next key, or `None`. A character key is the character itself (`"a"`, 
 named: `"ENTER"`, `"BACKSPACE"`, `"DELETE"`, `"TAB"`, `"ESC"`, `"UP"`, `"DOWN"`, `"LEFT"`, `"RIGHT"`, `"HOME"`,
 `"END"`, `"PAGEUP"`, `"PAGEDOWN"`, `"INSERT"`, `"F1"`–`"F12"`. Modifiers come first: `"CTRL+S"`, `"ALT+X"`,
 `"SHIFT+TAB"`. Ctrl+C is not returned; it raises `KeyboardInterrupt`.
+
+#### `cyd.keys_down()` → `tuple`
+
+The names of the keys held down now (API level 5 and later), for games that need to know what is held.
+Characters come without modifiers (`"z"`, `"1"`, `" "` for space), other keys by their `cyd.key()` names
+(`"LEFT"`, `"ENTER"`), followed by any held modifier: `"SHIFT"`, `"CTRL"`, `"ALT"`. Most keyboards report
+up to six keys at once. A key sent with `desktop_key` counts as held for 250 ms.
 
 #### `cyd.keyboard_connected()` → `bool`
 

@@ -56,8 +56,12 @@ void render_native(bool include_taskbar) {
     }
     const TickType_t started = xTaskGetTickCount();
     clear_clip();
-    for (int y = 0; y < cyd::desktop::native::kContentHeight; y += kTransitionTileRows) {
-        const int height = std::min(kTransitionTileRows, cyd::desktop::native::kContentHeight - y);
+    const bool full_screen = cyd::desktop::native::has_flag(snapshot.foreground_app,
+                                                            cyd::desktop::native::kAppFullScreen);
+    const int rows = full_screen ? kHeight : cyd::desktop::native::kContentHeight;
+    if (full_screen) include_taskbar = false;
+    for (int y = 0; y < rows; y += kTransitionTileRows) {
+        const int height = std::min(kTransitionTileRows, rows - y);
         begin_transition_tile(y, height);
         const cyd::desktop::native::TileSurface surface{
             line_buffer, kWidth, height, kWidth, y,
@@ -145,7 +149,8 @@ namespace {
 void touch_down_feedback(int x, int y) {
     const auto snapshot = cyd::desktop::shell_state().snapshot();
     if (snapshot.view == cyd::desktop::View::Native &&
-        cyd::desktop::native::has_flag(snapshot.foreground_app, cyd::desktop::native::kAppVideoSurface)) return;
+        (cyd::desktop::native::has_flag(snapshot.foreground_app, cyd::desktop::native::kAppVideoSurface) ||
+         cyd::desktop::native::has_flag(snapshot.foreground_app, cyd::desktop::native::kAppFullScreen))) return;
     if (y >= kTaskbarY) {
         if (x < 54 || (x >= 130 && x < 168)) {
             fill_round_rect(134, 214, 30, 21, 7, kWindowBlue);

@@ -154,9 +154,10 @@ cyd.run()           # Home / Start / 長押しで抜ける
 
 | 名前 | 値 |
 |---|---|
-| `cyd.API_LEVEL` | ファームウェアが提供する API レベル（現在 4） |
+| `cyd.API_LEVEL` | ファームウェアが提供する API レベル（現在 5） |
 | `cyd.BLACK` `cyd.NAVY` `cyd.BLUE` `cyd.GREEN` `cyd.CYAN` `cyd.RED` `cyd.MAGENTA` `cyd.ORANGE` `cyd.YELLOW` `cyd.WHITE` | RGB565 の色 |
 | `cyd.GAME_PLAYER` `cyd.GAME_ENEMY` `cyd.GAME_BULLET` `cyd.GAME_SHOT` `cyd.GAME_SPARK` | スプライトの種類（0〜4） |
+| `cyd.TILE_FLIP_X` `cyd.TILE_FLIP_Y` `cyd.TILE_BEHIND` | `cyd.tile_sprite()` のフラグ（1、2、4） |
 | `cyd.HTTP_MAX_BYTES` | `cyd.http_get()` が受け取る本文の上限（32,768） |
 
 ### 3.2 上限
@@ -235,6 +236,40 @@ cyd.run()           # Home / Start / 長押しで抜ける
 
 #### `cyd.touch()` → `(pressed, x, y)`
 いまの物理タッチ状態を返します。ゲームループでの低遅延なポーリング用です。
+
+### 5.1 タイルマップ（API レベル 5 以降）
+
+横スクロールのゲーム向けに、タイルマップ・スプライト・文字を 320×240 の全画面にネイティブで描きます
+（タスクバーも覆います）。フレームは `cyd.tile_present()` を呼んだ MicroPython のタスクで描かれ、
+16 行ずつの帯で転送されます。例は `examples/pip_quest` です。
+
+絵はすべて 16×16 のセルで、1 ピクセル 4 ビット（上位ニブルが左）、1 セル 128 バイトです。
+渡したバッファはコピーせずそのまま使うので、`tilemap` のバイトを書き換えると次のフレームからマップが変わります。
+バッファの大きさは変えないでください。
+
+#### `cyd.tile_begin(palette, tiles, sprites, tilemap, width, height, origin_y=0)` → `True`
+タイルマップのビューに切り替えます。
+`palette` はビッグエンディアン RGB565 の 16 色を 1〜4 組（32 バイト単位）。タイルはパレット 0 を使い、
+タイル 0 は空（パレット 0 の色 0 で塗る）です。`sprites` のセルでは色 0 が透明です。
+`tilemap` は `width`×`height`（高さ 32 まで）のタイル番号を行ごとに並べたもので、画面の `origin_y` 行目から描きます。
+不正な引数は `ValueError` です。別の場面へ移るときは、もう一度呼んでバッファを取り替えます。
+
+#### `cyd.tile_palette(palette)`
+パレットを取り替えます。組の数は `tile_begin()` と同じでなければなりません。
+
+#### `cyd.tile_frame(scroll_x)`
+次のフレームを始めます。マップを横に `scroll_x` ピクセルずらし、スプライトを消します。
+
+#### `cyd.tile_sprite(cell, x, y, flags=0)` → `bool`
+スプライトのセルを画面座標に置きます。1 フレーム 64 個まで。`flags` は `cyd.TILE_FLIP_X`・`cyd.TILE_FLIP_Y`・
+`cyd.TILE_BEHIND`（マップが色 0 でない所には描かない）の和に、パレット番号×16 を足したものです。
+
+#### `cyd.tile_text(slot, x, y, value, color=1, scale=1)` → `bool`
+文字列を 8 個のスロット（0〜7）の 1 つに置きます。32 文字まで、色はパレット 0 の番号、倍率は 1〜4。
+フレームをまたいで残り、`""` で消えます。
+
+#### `cyd.tile_present()` → `bool`
+組み立てたフレームを表示します。タイルマップのビューが前面になくなると `False`（アプリは終了してください）。
 
 ---
 
@@ -327,6 +362,12 @@ Bluetooth キーボード（Settings > Wireless > KEYBOARD でペアリング）
 それ以外は名前です: `"ENTER"`、`"BACKSPACE"`、`"DELETE"`、`"TAB"`、`"ESC"`、`"UP"`、`"DOWN"`、`"LEFT"`、
 `"RIGHT"`、`"HOME"`、`"END"`、`"PAGEUP"`、`"PAGEDOWN"`、`"INSERT"`、`"F1"`〜`"F12"`。
 修飾キーは前に付きます: `"CTRL+S"`、`"ALT+X"`、`"SHIFT+TAB"`。Ctrl+C は返らず、`KeyboardInterrupt` になります。
+
+#### `cyd.keys_down()` → `tuple`
+いま押されているキーの名前を返します（API レベル 5 以降）。ゲームで押しっぱなしを見るためのものです。
+文字のキーは修飾なしの文字（`"z"`、`"1"`、空白は `" "`）、それ以外は `cyd.key()` と同じ名前（`"LEFT"`、`"ENTER"`）で、
+最後に押されている修飾キー `"SHIFT"`・`"CTRL"`・`"ALT"` が付きます。多くのキーボードは同時に 6 キーまで報告します。
+`desktop_key` で送ったキーは 250 ms の間押されているものとして報告します。
 
 #### `cyd.keyboard_connected()` → `bool`
 Bluetooth キーボードが接続中なら `True`。

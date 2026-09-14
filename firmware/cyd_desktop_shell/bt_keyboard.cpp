@@ -831,6 +831,25 @@ extern "C" int cyd_desktop_bt_forget(void) {
 #endif
 }
 
+extern "C" int cyd_desktop_bt_keys_down(uint8_t usages[6], uint8_t *modifiers) {
+    *modifiers = 0;
+#if CYD_BT_SUPPORTED
+    int count = 0;
+    taskENTER_CRITICAL(&lock);
+    if (connected_dev != nullptr) {
+        *modifiers = held_modifiers;
+        for (uint8_t code : previous_keys) {
+            if (code >= 0x04) usages[count++] = code;
+        }
+    }
+    taskEXIT_CRITICAL(&lock);
+    return count;
+#else
+    (void)usages;
+    return 0;
+#endif
+}
+
 extern "C" bool cyd_desktop_bt_key_next(cyd_bt_key_t *out) {
 #if CYD_BT_SUPPORTED
     bool found = false;

@@ -92,6 +92,13 @@ void flags_drive_shell_behaviour() {
     assert(has_flag("neon3d", kAppLaunchable));
     assert(!has_flag("neon3d", kAppScriptHosted));
     assert(!has_flag("missing", kAppLaunchable));
+
+    // cyd.tile_begin() finds its surface the same way; it covers the taskbar.
+    const NativeApp *tiles = find_with_flag(kAppTileSurface);
+    assert(tiles != nullptr);
+    assert(has_flag(tiles->id, kAppScriptHosted));
+    assert(has_flag(tiles->id, kAppFullScreen));
+    assert(!has_flag(tiles->id, kAppLaunchable));
 }
 
 void apps_describe_their_own_controls() {
