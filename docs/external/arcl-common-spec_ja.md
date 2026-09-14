@@ -1,7 +1,7 @@
 # ARCL 共通仕様（他機種エミュレータ向け）
 
-> **外部仕様**：この文書は CYD Desktop Sandbox とは別のプロジェクトの仕様書で、参照用に v0.5 を同梱しています。
-> CYD Desktop Sandbox の MCP ツールはこの仕様に準拠しています（準拠の範囲は [MCP ツール一覧](../mcp-tools_ja.md)）。
+> **外部仕様**：この文書は ARCL CYD Desktop とは別のプロジェクトの仕様書で、参照用に v0.5 を同梱しています。
+> ARCL CYD Desktop の MCP ツールはこの仕様に準拠しています（準拠の範囲は [MCP ツール一覧](../mcp-tools_ja.md)）。
 > 本リポジトリの MIT ライセンスはこの文書には適用されません。以下は原文のままです。
 
 [English version](arcl-common-spec_en.md)

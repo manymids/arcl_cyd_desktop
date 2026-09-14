@@ -2,7 +2,7 @@
 
 English | [日本語](THIRD_PARTY_NOTICES_ja.md)
 
-Original CYD Desktop Sandbox code is provided under the MIT License in the root
+Original ARCL CYD Desktop code is provided under the MIT License in the root
 [LICENSE](LICENSE). Third-party code and fonts retain their respective copyright
 notices and license conditions. The project's MIT License does not replace them.
 

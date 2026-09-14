@@ -2,7 +2,7 @@
 
 [English](cyd-api_en.md) | 日本語
 
-CYD Desktop Sandbox 上で動く MicroPython アプリ向けの API をまとめたものです。フェーズ文書
+ARCL CYD Desktop 上で動く MicroPython アプリ向けの API をまとめたものです。フェーズ文書
 （p9 / p14 / p19 / p20 など）に散っていた説明を一本にしました。
 
 - 実装: `firmware/cyd_desktop_board/modules/cyd.py`

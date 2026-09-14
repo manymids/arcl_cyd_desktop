@@ -6,7 +6,7 @@ Date: 2026-09-07
 
 ## Result
 
-A custom MicroPython board for CYD Desktop Sandbox was successfully built for ESP32.
+A custom MicroPython board for ARCL CYD Desktop was successfully built for ESP32.
 
 | Item | Value |
 | --- | --- |

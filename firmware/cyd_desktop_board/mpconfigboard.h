@@ -1,4 +1,4 @@
-#define MICROPY_HW_BOARD_NAME "CYD Desktop Sandbox"
+#define MICROPY_HW_BOARD_NAME "ARCL CYD Desktop"
 #define MICROPY_HW_MCU_NAME "ESP32-D0WD-V3"
 
 // Wi-Fi and the network stack, usable when the radio mode is Wi-Fi.

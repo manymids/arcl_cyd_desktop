@@ -6,7 +6,7 @@
 
 ## 成果
 
-CYD Desktop Sandbox用のMicroPython custom boardを、ESP32向けに正常ビルドした。
+ARCL CYD Desktop用のMicroPython custom boardを、ESP32向けに正常ビルドした。
 
 | 項目 | 値 |
 | --- | --- |

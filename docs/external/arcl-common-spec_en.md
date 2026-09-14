@@ -1,7 +1,7 @@
 # ARCL Common Specification (for Retro-Machine Emulators)
 
-> **External specification:** this document belongs to a project separate from CYD Desktop
-> Sandbox and is included, at v0.5, for reference. CYD Desktop Sandbox's MCP tools follow it
+> **External specification:** this document belongs to a project separate from ARCL CYD
+> Desktop and is included, at v0.5, for reference. ARCL CYD Desktop's MCP tools follow it
 > (see [MCP tools](../mcp-tools_en.md) for the extent). This repository's MIT License does not
 > apply to this document. The text below is unchanged.
 

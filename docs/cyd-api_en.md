@@ -2,7 +2,7 @@
 
 English | [日本語](cyd-api_ja.md)
 
-This reference describes the MicroPython application API for CYD Desktop Sandbox.
+This reference describes the MicroPython application API for ARCL CYD Desktop.
 It consolidates the descriptions previously spread across phase documents
 (P9, P14, P19, P20 and others).
 

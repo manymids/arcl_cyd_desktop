@@ -1,4 +1,4 @@
-# CYD Desktop Sandbox ボード定義
+# ARCL CYD Desktop ボード定義
 
 [English](README_en.md) | 日本語
 

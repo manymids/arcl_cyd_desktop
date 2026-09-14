@@ -113,7 +113,7 @@ export function flashingGuide(version, fullImage) {
       en: `\nTo flash a single file (for example from a browser-based flasher), write \`${fullImage}\` at 0x0 (blank boards).\nThis image also erases the settings area (NVS), so touch calibration and settings are reset.\n\n\`\`\`\npython -m esptool --chip esp32 --port COM6 --before default_reset write_flash 0x0 ${fullImage}\n\`\`\`\n`,
     }
     : { ja: '', en: '' };
-  return `# CYD Desktop Sandbox ${version} firmware
+  return `# ARCL CYD Desktop ${version} firmware
 
 ## 日本語
 
@@ -232,7 +232,7 @@ function main(argv) {
 
   const binaries = entries.map(({ name, data }) => ({ file: name.slice(folder.length + 1), bytes: data.length, sha256: sha256(data) }));
   const info = {
-    name: 'CYD Desktop Sandbox firmware',
+    name: 'ARCL CYD Desktop firmware',
     version,
     board: 'ESP32-2432S028 (ILI9341 panel, XPT2046 touch), ESP32-D0WD-V3, 4 MiB flash',
     source_commit: git(['rev-parse', 'HEAD']),

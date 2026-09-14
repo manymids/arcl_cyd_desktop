@@ -2,7 +2,7 @@
 
 [English](THIRD_PARTY_NOTICES_en.md) | 日本語
 
-CYD Desktop Sandbox の独自コードは、ルートの [LICENSE](LICENSE) に記載した MIT
+ARCL CYD Desktop の独自コードは、ルートの [LICENSE](LICENSE) に記載した MIT
 License で提供します。第三者由来のコード・フォントは、それぞれの著作権表示と
 ライセンスに従います。本体の MIT License は、第三者の表示や条件を置き換えません。
 
