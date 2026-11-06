@@ -9,6 +9,8 @@ from _cyd_shell import (app_button, app_clear, app_event, app_log, app_primitive
                          key_read as _key_read, keyboard_connected as _keyboard_connected,
                          runtime_no_limit as _runtime_no_limit,
                          game_frame as _game_frame, game_sprite as _game_sprite,
+                         game_bitmap as _game_bitmap,
+                         game_triangle as _game_triangle, draw_triangle as _draw_triangle,
                           game_touch as _game_touch, runtime_keepalive,
                           runtime_ping as _runtime_ping,
                           video_begin as _video_begin, video_present as _video_present,
@@ -38,6 +40,18 @@ GAME_ENEMY = 1
 GAME_BULLET = 2
 GAME_SHOT = 3
 GAME_SPARK = 4
+
+BITMAP_SHIP = 0
+BITMAP_FLAME_L = 1
+BITMAP_FLAME_R = 2
+BITMAP_ENEMY_A = 3
+BITMAP_ENEMY_B = 4
+BITMAP_ENEMY_HEAVY = 5
+BITMAP_ENEMY_CRUISER = 6
+BITMAP_EXP = 7
+BITMAP_TRUSS = 8
+BITMAP_MODULE = 9
+BITMAP_ROCKET = 10
 
 _callbacks = {}
 _app_root = None
@@ -135,6 +149,41 @@ def game_sprite(kind, x, y, color=WHITE, size=3):
     if result:
         _mark_dirty()
     return result
+
+def game_bitmap(id, x, y, scale=100, flags=0):
+    """Append one of at most 128 native-rendered scaled bitmap sprites."""
+    result = _game_bitmap(int(id), int(x), int(y), int(scale), int(flags))
+    if result:
+        _mark_dirty()
+    return result
+
+def game_triangle(x0, y0, x1, y1, x2, y2, color=WHITE, wire=False):
+    """Append one native rasterized triangle (flat-shaded solid or wireframe)."""
+    result = _game_triangle(int(x0), int(y0), int(x1), int(y1), int(x2), int(y2),
+                            int(color) & 0xFFFF, 1 if wire else 0)
+    if result:
+        _mark_dirty()
+    return result
+
+def game_quad(x0, y0, x1, y1, x2, y2, x3, y3, color=WHITE, wire=False):
+    """Append one quad polygon as two native rasterized triangles."""
+    r1 = _game_triangle(int(x0), int(y0), int(x1), int(y1), int(x2), int(y2),
+                        int(color) & 0xFFFF, 1 if wire else 0)
+    r2 = _game_triangle(int(x0), int(y0), int(x2), int(y2), int(x3), int(y3),
+                        int(color) & 0xFFFF, 1 if wire else 0)
+    if r1 or r2:
+        _mark_dirty()
+    return r1 and r2
+
+def triangle(x0, y0, x1, y1, x2, y2, color=WHITE, fill=True):
+    """Draw a 2D triangle (solid filled or wireframe outline)."""
+    _draw_triangle(int(x0), int(y0), int(x1), int(y1), int(x2), int(y2),
+                   int(color) & 0xFFFF, 0 if fill else 1)
+    _mark_dirty()
+
+def fill_triangle(x0, y0, x1, y1, x2, y2, color=WHITE):
+    """Draw a 2D solid filled triangle."""
+    triangle(x0, y0, x1, y1, x2, y2, color, fill=True)
 
 def touch():
     """Return (pressed, x, y) for low-latency polling by a game loop."""

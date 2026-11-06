@@ -19,6 +19,9 @@ extern "C" bool cyd_desktop_app_primitive(int type, int x0, int y0, int x1, int 
 extern "C" void cyd_desktop_game_begin(int background_top, int background_bottom, int accent);
 extern "C" void cyd_desktop_game_frame(uint32_t frame_number, uint32_t score, int lives, int bombs);
 extern "C" bool cyd_desktop_game_sprite(int kind, int x, int y, int color, int size);
+extern "C" bool cyd_desktop_game_bitmap(int id, int x, int y, int scale, int flags);
+extern "C" bool cyd_desktop_game_triangle(int x0, int y0, int x1, int y1, int x2, int y2, int color, int flags);
+extern "C" void cyd_desktop_draw_triangle(int x0, int y0, int x1, int y1, int x2, int y2, int color, int wire);
 extern "C" void cyd_desktop_game_touch(bool *pressed, int *x, int *y);
 extern "C" bool cyd_desktop_video_begin(void);
 extern "C" int cyd_desktop_video_present(const uint8_t *jpeg, size_t size);
@@ -178,6 +181,43 @@ mp_obj_t game_sprite(size_t, const mp_obj_t *args) {
         mp_obj_get_int(args[2]), mp_obj_get_int(args[3]), mp_obj_get_int(args[4])));
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(game_sprite_obj, 5, 5, game_sprite);
+
+mp_obj_t game_bitmap(size_t n_args, const mp_obj_t *args) {
+    int id = mp_obj_get_int(args[0]);
+    int x = mp_obj_get_int(args[1]);
+    int y = mp_obj_get_int(args[2]);
+    int scale = n_args > 3 ? mp_obj_get_int(args[3]) : 100;
+    int flags = n_args > 4 ? mp_obj_get_int(args[4]) : 0;
+    return mp_obj_new_bool(cyd_desktop_game_bitmap(id, x, y, scale, flags));
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(game_bitmap_obj, 3, 5, game_bitmap);
+
+mp_obj_t game_triangle(size_t n_args, const mp_obj_t *args) {
+    int x0 = mp_obj_get_int(args[0]);
+    int y0 = mp_obj_get_int(args[1]);
+    int x1 = mp_obj_get_int(args[2]);
+    int y1 = mp_obj_get_int(args[3]);
+    int x2 = mp_obj_get_int(args[4]);
+    int y2 = mp_obj_get_int(args[5]);
+    int color = mp_obj_get_int(args[6]);
+    int flags = n_args > 7 ? mp_obj_get_int(args[7]) : 0;
+    return mp_obj_new_bool(cyd_desktop_game_triangle(x0, y0, x1, y1, x2, y2, color, flags));
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(game_triangle_obj, 7, 8, game_triangle);
+
+mp_obj_t draw_triangle(size_t n_args, const mp_obj_t *args) {
+    int x0 = mp_obj_get_int(args[0]);
+    int y0 = mp_obj_get_int(args[1]);
+    int x1 = mp_obj_get_int(args[2]);
+    int y1 = mp_obj_get_int(args[3]);
+    int x2 = mp_obj_get_int(args[4]);
+    int y2 = mp_obj_get_int(args[5]);
+    int color = mp_obj_get_int(args[6]);
+    int wire = n_args > 7 ? mp_obj_get_int(args[7]) : 0;
+    cyd_desktop_draw_triangle(x0, y0, x1, y1, x2, y2, color, wire);
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(draw_triangle_obj, 7, 8, draw_triangle);
 
 mp_obj_t game_touch() {
     bool pressed = false;
@@ -390,6 +430,9 @@ const mp_rom_map_elem_t globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_game_begin), MP_ROM_PTR(&game_begin_obj)},
     {MP_ROM_QSTR(MP_QSTR_game_frame), MP_ROM_PTR(&game_frame_obj)},
     {MP_ROM_QSTR(MP_QSTR_game_sprite), MP_ROM_PTR(&game_sprite_obj)},
+    {MP_ROM_QSTR(MP_QSTR_game_bitmap), MP_ROM_PTR(&game_bitmap_obj)},
+    {MP_ROM_QSTR(MP_QSTR_game_triangle), MP_ROM_PTR(&game_triangle_obj)},
+    {MP_ROM_QSTR(MP_QSTR_draw_triangle), MP_ROM_PTR(&draw_triangle_obj)},
     {MP_ROM_QSTR(MP_QSTR_game_touch), MP_ROM_PTR(&game_touch_obj)},
     {MP_ROM_QSTR(MP_QSTR_video_begin), MP_ROM_PTR(&video_begin_obj)},
     {MP_ROM_QSTR(MP_QSTR_video_present), MP_ROM_PTR(&video_present_obj)},

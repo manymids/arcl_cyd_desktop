@@ -6,6 +6,7 @@
 #include "screen/widgets.h"
 #include "native_app.h"
 #include "shell_state.h"
+#include "game_bitmap_assets.h"
 
 extern "C" {
 #include "freertos/FreeRTOS.h"
@@ -48,10 +49,22 @@ struct GameSprite {
     int16_t x;
     int16_t y;
     uint16_t color;
+    uint16_t scale;
     uint8_t kind;
     uint8_t size;
+    uint8_t flags;
+    uint8_t reserved;
 };
 constexpr uint8_t kGameSpriteCapacity = 128;
+struct GameTriangle {
+    int16_t x0, y0;
+    int16_t x1, y1;
+    int16_t x2, y2;
+    uint16_t color;
+    uint8_t flags;
+    uint8_t reserved;
+};
+constexpr uint16_t kGameTriangleCapacity = 256;
 struct GameSurface {
     bool active;
     uint16_t background_top;
@@ -62,7 +75,9 @@ struct GameSurface {
     uint8_t lives;
     uint8_t bombs;
     uint8_t sprite_count;
+    uint16_t triangle_count;
     GameSprite sprites[kGameSpriteCapacity];
+    GameTriangle triangles[kGameTriangleCapacity];
 };
 struct AppSurface {
     char app_id[25];
@@ -322,6 +337,61 @@ void draw_game_sprite(const GameSprite &sprite) {
     }
 }
 
+void draw_game_bitmap_sprite(const GameSprite &sprite) {
+    if (sprite.kind < 10) return;
+    const uint8_t id = sprite.kind - 10;
+    const auto *info = get_game_bitmap_info(id);
+    if (!info || !info->data || info->width == 0 || info->height == 0) return;
+
+    const int scale = std::max(1, static_cast<int>(sprite.scale));
+    const int dw = std::max(1, (static_cast<int>(info->width) * scale + 50) / 100);
+    const int dh = std::max(1, (static_cast<int>(info->height) * scale + 50) / 100);
+
+    const int x0 = sprite.x - dw / 2;
+    const int y0 = sprite.y - dh / 2;
+    const int x1 = x0 + dw;
+    const int y1 = y0 + dh;
+
+    if (tile_raster_active) {
+        if (y1 <= tile_raster_y || y0 >= tile_raster_y + tile_raster_height) return;
+    }
+
+    const int y_start = std::max(0, std::max(y0, tile_raster_active ? tile_raster_y : 0));
+    const int y_end = std::min(kTaskbarY, std::min(y1, tile_raster_active ? tile_raster_y + tile_raster_height : kTaskbarY));
+    if (y_start >= y_end) return;
+
+    const int x_start = std::max(0, x0);
+    const int x_end = std::min(kWidth, x1);
+    if (x_start >= x_end) return;
+
+    const bool flip_x = (sprite.flags & 1) != 0;
+    const uint32_t dx_src = ((static_cast<uint32_t>(info->width) << 16) + (dw / 2)) / dw;
+    const uint16_t *src_bmp = info->data;
+    const uint16_t src_w = info->width;
+    const uint16_t src_h = info->height;
+
+    for (int y = y_start; y < y_end; ++y) {
+        int sy = ((y - y0) * static_cast<int>(src_h)) / dh;
+        if (sy < 0 || sy >= src_h) continue;
+
+        uint16_t *dst_row = line_buffer + static_cast<size_t>(y - (tile_raster_active ? tile_raster_y : 0)) * kWidth;
+        const uint16_t *src_row = src_bmp + static_cast<size_t>(sy) * src_w;
+
+        uint32_t x_src_fp = static_cast<uint32_t>(x_start - x0) * dx_src;
+        for (int x = x_start; x < x_end; ++x) {
+            uint32_t sx = x_src_fp >> 16;
+            x_src_fp += dx_src;
+            if (sx >= src_w) sx = src_w - 1;
+            if (flip_x) sx = (src_w - 1) - sx;
+
+            uint16_t pixel = src_row[sx];
+            if (pixel != 0x0000) {
+                dst_row[x] = swap16(pixel);
+            }
+        }
+    }
+}
+
 void draw_game_surface(const char *title, const GameSurface &game) {
     fill_rect(0, 0, kWidth, 18, 0x0863);
     fill_rect(0, 18, kWidth, 48, game.background_top);
@@ -339,13 +409,21 @@ void draw_game_surface(const char *title, const GameSurface &game) {
     }
     fill_rect(0, 18, 2, 194, game.accent);
     fill_rect(318, 18, 2, 194, game.accent);
+    for (uint16_t index = 0; index < game.triangle_count; ++index) {
+        const auto &tri = game.triangles[index];
+        draw_triangle(tri.x0, tri.y0, tri.x1, tri.y1, tri.x2, tri.y2, tri.color, (tri.flags & 1) != 0);
+    }
     for (uint8_t index = 0; index < game.sprite_count; ++index) {
         const auto &sprite = game.sprites[index];
-        const int radius = static_cast<int>(sprite.size) + 4;
-        if (tile_raster_active &&
-            (sprite.y + radius < tile_raster_y || sprite.y - radius >= tile_raster_y + tile_raster_height))
-            continue;
-        draw_game_sprite(sprite);
+        if (sprite.kind < 10) {
+            const int radius = static_cast<int>(sprite.size) + 4;
+            if (tile_raster_active &&
+                (sprite.y + radius < tile_raster_y || sprite.y - radius >= tile_raster_y + tile_raster_height))
+                continue;
+            draw_game_sprite(sprite);
+        } else {
+            draw_game_bitmap_sprite(sprite);
+        }
     }
     char score[32];
     std::snprintf(score, sizeof(score), "SCORE %07lu", static_cast<unsigned long>(game.score));
@@ -663,6 +741,7 @@ extern "C" void cyd_desktop_game_frame(uint32_t frame_number, uint32_t score, in
     game_surface.lives = static_cast<uint8_t>(std::max(0, std::min(5, lives)));
     game_surface.bombs = static_cast<uint8_t>(std::max(0, std::min(3, bombs)));
     game_surface.sprite_count = 0;
+    game_surface.triangle_count = 0;
     taskEXIT_CRITICAL(&game_surface_lock);
 }
 
@@ -679,6 +758,56 @@ extern "C" bool cyd_desktop_game_sprite(int kind, int x, int y, int color, int s
     sprite.y = static_cast<int16_t>(std::max(-16, std::min(kTaskbarY + 16, y)));
     sprite.color = static_cast<uint16_t>(color);
     sprite.size = static_cast<uint8_t>(std::max(1, std::min(16, size)));
+    sprite.scale = 0;
+    sprite.flags = 0;
+    sprite.reserved = 0;
+    taskEXIT_CRITICAL(&game_surface_lock);
+    return true;
+}
+
+extern "C" bool cyd_desktop_game_triangle(int x0, int y0, int x1, int y1, int x2, int y2,
+                                          int color, int flags) {
+    taskENTER_CRITICAL(&game_surface_lock);
+    if (!game_surface.active || game_surface.triangle_count >= kGameTriangleCapacity) {
+        taskEXIT_CRITICAL(&game_surface_lock);
+        return false;
+    }
+    auto &tri = game_surface.triangles[game_surface.triangle_count++];
+    tri.x0 = static_cast<int16_t>(x0);
+    tri.y0 = static_cast<int16_t>(y0);
+    tri.x1 = static_cast<int16_t>(x1);
+    tri.y1 = static_cast<int16_t>(y1);
+    tri.x2 = static_cast<int16_t>(x2);
+    tri.y2 = static_cast<int16_t>(y2);
+    tri.color = static_cast<uint16_t>(color);
+    tri.flags = static_cast<uint8_t>(flags);
+    tri.reserved = 0;
+    taskEXIT_CRITICAL(&game_surface_lock);
+    return true;
+}
+
+extern "C" void cyd_desktop_draw_triangle(int x0, int y0, int x1, int y1, int x2, int y2,
+                                          int color, int wire) {
+    draw_triangle(x0, y0, x1, y1, x2, y2, static_cast<uint16_t>(color), wire != 0);
+}
+
+extern "C" bool cyd_desktop_game_bitmap(int id, int x, int y, int scale, int flags) {
+    if (id < 0 || id >= kGameBitmapCount) return false;
+    if (scale <= 0) return false;
+    taskENTER_CRITICAL(&game_surface_lock);
+    if (!game_surface.active || game_surface.sprite_count >= kGameSpriteCapacity) {
+        taskEXIT_CRITICAL(&game_surface_lock);
+        return false;
+    }
+    auto &sprite = game_surface.sprites[game_surface.sprite_count++];
+    sprite.kind = static_cast<uint8_t>(10 + id);
+    sprite.x = static_cast<int16_t>(std::max(-320, std::min(640, x)));
+    sprite.y = static_cast<int16_t>(std::max(-240, std::min(480, y)));
+    sprite.scale = static_cast<uint16_t>(std::min(1000, scale));
+    sprite.flags = static_cast<uint8_t>(flags);
+    sprite.color = 0;
+    sprite.size = 0;
+    sprite.reserved = 0;
     taskEXIT_CRITICAL(&game_surface_lock);
     return true;
 }
