@@ -56,6 +56,8 @@ void render_in_transition_tiles(Painter painter) {
 void frame(int x, int y, int w, int h, uint16_t color);
 void text(const char *value, int x, int y, uint16_t color, int scale = 1);
 void line(int x0, int y0, int x1, int y1, uint16_t color, int width = 1);
+void draw_triangle(int x0, int y0, int x1, int y1, int x2, int y2, uint16_t color, bool wireframe = false);
+void fill_triangle(int x0, int y0, int x1, int y1, int x2, int y2, uint16_t color);
 void fill_circle(int center_x, int center_y, int radius, uint16_t color);
 void circle(int center_x, int center_y, int radius, uint16_t color, int width = 1);
 void fill_round_rect(int x, int y, int width, int height, int radius, uint16_t color);

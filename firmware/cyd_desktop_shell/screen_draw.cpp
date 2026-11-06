@@ -144,6 +144,70 @@ void line(int x0, int y0, int x1, int y1, uint16_t color, int width) {
     }
 }
 
+void draw_triangle(int x0, int y0, int x1, int y1, int x2, int y2, uint16_t color, bool wireframe) {
+    if (wireframe) {
+        line(x0, y0, x1, y1, color, 1);
+        line(x1, y1, x2, y2, color, 1);
+        line(x2, y2, x0, y0, color, 1);
+        return;
+    }
+
+    if (y0 > y1) { std::swap(x0, x1); std::swap(y0, y1); }
+    if (y1 > y2) { std::swap(x1, x2); std::swap(y1, y2); }
+    if (y0 > y1) { std::swap(x0, x1); std::swap(y0, y1); }
+
+    if (y0 == y2) {
+        int xl = std::min(x0, std::min(x1, x2));
+        int xr = std::max(x0, std::max(x1, x2));
+        if (y0 >= 0 && y0 < kHeight) {
+            fill_rect(xl, y0, xr - xl + 1, 1, color);
+        }
+        return;
+    }
+
+    if (tile_raster_active) {
+        if (y2 < tile_raster_y || y0 >= tile_raster_y + tile_raster_height) return;
+    }
+
+    const int y_start = std::max(y0, tile_raster_active ? tile_raster_y : 0);
+    const int y_end = std::min(y2 + 1, tile_raster_active ? tile_raster_y + tile_raster_height : kHeight);
+    if (y_start >= y_end) return;
+
+    const uint16_t swapped_pixel = swap16(color);
+
+    for (int y = y_start; y < y_end; ++y) {
+        int xa = x0 + ((y - y0) * (x2 - x0)) / (y2 - y0);
+        int xb;
+        if (y < y1) {
+            xb = x0 + ((y - y0) * (x1 - x0)) / (y1 - y0);
+        } else if (y2 > y1) {
+            xb = x1 + ((y - y1) * (x2 - x1)) / (y2 - y1);
+        } else {
+            xb = x1;
+        }
+
+        int xl = std::min(xa, xb);
+        int xr = std::max(xa, xb);
+        if (xl < 0) xl = 0;
+        if (xr >= kWidth) xr = kWidth - 1;
+
+        if (xl <= xr) {
+            const int w = xr - xl + 1;
+            if (tile_raster_active) {
+                uint16_t *destination = line_buffer +
+                    static_cast<size_t>(y - tile_raster_y) * kWidth + xl;
+                std::fill(destination, destination + w, swapped_pixel);
+            } else {
+                fill_rect(xl, y, w, 1, color);
+            }
+        }
+    }
+}
+
+void fill_triangle(int x0, int y0, int x1, int y1, int x2, int y2, uint16_t color) {
+    draw_triangle(x0, y0, x1, y1, x2, y2, color, false);
+}
+
 void fill_circle(int center_x, int center_y, int radius, uint16_t color) {
     if (radius <= 0) return;
     for (int y = -radius; y <= radius; ++y) {

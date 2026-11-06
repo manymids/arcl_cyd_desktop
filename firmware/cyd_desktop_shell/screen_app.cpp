@@ -52,6 +52,15 @@ struct GameSprite {
     uint8_t size;
 };
 constexpr uint8_t kGameSpriteCapacity = 128;
+struct GameTriangle {
+    int16_t x0, y0;
+    int16_t x1, y1;
+    int16_t x2, y2;
+    uint16_t color;
+    uint8_t flags;
+    uint8_t reserved;
+};
+constexpr uint16_t kGameTriangleCapacity = 256;
 struct GameSurface {
     bool active;
     uint16_t background_top;
@@ -62,7 +71,9 @@ struct GameSurface {
     uint8_t lives;
     uint8_t bombs;
     uint8_t sprite_count;
+    uint16_t triangle_count;
     GameSprite sprites[kGameSpriteCapacity];
+    GameTriangle triangles[kGameTriangleCapacity];
 };
 struct AppSurface {
     char app_id[25];
@@ -339,6 +350,10 @@ void draw_game_surface(const char *title, const GameSurface &game) {
     }
     fill_rect(0, 18, 2, 194, game.accent);
     fill_rect(318, 18, 2, 194, game.accent);
+    for (uint16_t index = 0; index < game.triangle_count; ++index) {
+        const auto &tri = game.triangles[index];
+        draw_triangle(tri.x0, tri.y0, tri.x1, tri.y1, tri.x2, tri.y2, tri.color, (tri.flags & 1) != 0);
+    }
     for (uint8_t index = 0; index < game.sprite_count; ++index) {
         const auto &sprite = game.sprites[index];
         const int radius = static_cast<int>(sprite.size) + 4;
@@ -663,6 +678,7 @@ extern "C" void cyd_desktop_game_frame(uint32_t frame_number, uint32_t score, in
     game_surface.lives = static_cast<uint8_t>(std::max(0, std::min(5, lives)));
     game_surface.bombs = static_cast<uint8_t>(std::max(0, std::min(3, bombs)));
     game_surface.sprite_count = 0;
+    game_surface.triangle_count = 0;
     taskEXIT_CRITICAL(&game_surface_lock);
 }
 
@@ -681,6 +697,32 @@ extern "C" bool cyd_desktop_game_sprite(int kind, int x, int y, int color, int s
     sprite.size = static_cast<uint8_t>(std::max(1, std::min(16, size)));
     taskEXIT_CRITICAL(&game_surface_lock);
     return true;
+}
+
+extern "C" bool cyd_desktop_game_triangle(int x0, int y0, int x1, int y1, int x2, int y2,
+                                          int color, int flags) {
+    taskENTER_CRITICAL(&game_surface_lock);
+    if (!game_surface.active || game_surface.triangle_count >= kGameTriangleCapacity) {
+        taskEXIT_CRITICAL(&game_surface_lock);
+        return false;
+    }
+    auto &tri = game_surface.triangles[game_surface.triangle_count++];
+    tri.x0 = static_cast<int16_t>(x0);
+    tri.y0 = static_cast<int16_t>(y0);
+    tri.x1 = static_cast<int16_t>(x1);
+    tri.y1 = static_cast<int16_t>(y1);
+    tri.x2 = static_cast<int16_t>(x2);
+    tri.y2 = static_cast<int16_t>(y2);
+    tri.color = static_cast<uint16_t>(color);
+    tri.flags = static_cast<uint8_t>(flags);
+    tri.reserved = 0;
+    taskEXIT_CRITICAL(&game_surface_lock);
+    return true;
+}
+
+extern "C" void cyd_desktop_draw_triangle(int x0, int y0, int x1, int y1, int x2, int y2,
+                                          int color, int wire) {
+    draw_triangle(x0, y0, x1, y1, x2, y2, static_cast<uint16_t>(color), wire != 0);
 }
 
 extern "C" bool cyd_desktop_app_primitive(int type, int x0, int y0, int x1, int y1,
