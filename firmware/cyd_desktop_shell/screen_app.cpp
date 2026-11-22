@@ -894,6 +894,16 @@ extern "C" bool cyd_desktop_game_triangle(int x0, int y0, int x1, int y1, int x2
     return true;
 }
 
+// Triangles game_meshes() could not queue because the frame was already full.
+extern "C" void cyd_desktop_game_note_dropped_triangles(int count) {
+    if (count <= 0) return;
+    taskENTER_CRITICAL(&game_surface_lock);
+    if (game_surface.active)
+        game_surface.dropped_triangles = static_cast<uint16_t>(
+            std::min<int>(UINT16_MAX, game_surface.dropped_triangles + count));
+    taskEXIT_CRITICAL(&game_surface_lock);
+}
+
 // Queued sprites, queued triangles, then the calls refused because the frame's
 // batch was full. All four restart at zero with each game_frame().
 extern "C" void cyd_desktop_game_draw_stats(int out[4]) {

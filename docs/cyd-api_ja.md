@@ -154,7 +154,7 @@ cyd.run()           # Home / Start / 長押しで抜ける
 
 | 名前 | 値 |
 |---|---|
-| `cyd.API_LEVEL` | ファームウェアが提供する API レベル（現在 10） |
+| `cyd.API_LEVEL` | ファームウェアが提供する API レベル（現在 11） |
 | `cyd.BLACK` `cyd.NAVY` `cyd.BLUE` `cyd.GREEN` `cyd.CYAN` `cyd.RED` `cyd.MAGENTA` `cyd.ORANGE` `cyd.YELLOW` `cyd.WHITE` | RGB565 の色 |
 | `cyd.GAME_PLAYER` `cyd.GAME_ENEMY` `cyd.GAME_BULLET` `cyd.GAME_SHOT` `cyd.GAME_SPARK` | スプライトの種類（0〜4） |
 | `cyd.TILE_FLIP_X` `cyd.TILE_FLIP_Y` `cyd.TILE_BEHIND` | `cyd.tile_sprite()` のフラグ（1、2、4） |
@@ -165,6 +165,7 @@ cyd.run()           # Home / Start / 長押しで抜ける
 | `cyd.IMAGE_CAP` `cyd.OVERLAY_CAP` | 画像の数（16）と 1 フレームのオーバーレイの数（24）の上限 |
 | `cyd.SPRITE_CAP` `cyd.SPRITE_ITEMS` `cyd.SPRITE_RECORD` | シーンのスプライト画像の数（32）、1 フレームの命令の数（128）、命令 1 件のバイト数（22） |
 | `cyd.BLEND_NORMAL` `cyd.BLEND_ADD` `cyd.BLEND_SUBTRACT` `cyd.BLEND_MULTIPLY` | `cyd.sprite_present()` の合成（0〜3） |
+| `cyd.MESH_VERTICES` `cyd.MESH_FACES` `cyd.MESH_INSTANCES` | メッシュ 1 つの頂点（256）と面（256）、`cyd.game_meshes()` 1 回のインスタンス（32）の上限 |
 | `cyd.HTTP_MAX_BYTES` | `cyd.http_get()` が受け取る本文の上限（32,768） |
 
 ### 3.2 上限
@@ -506,7 +507,7 @@ Android 版（IS01 / 12HT）の `cyd` と同じ名前・引数で使える補助
 `sqrt(x*x + y*y)` を返します。
 
 #### `cyd.features()` → `tuple`
-このファームウェアが持つ機能の名前を並べ替えて返します。いまは `"image"`、`"keyboard"`、`"overlay"`、`"phys"`、`"sprite"`、`"tile"`、`"touch_points"`、`"video"`、
+このファームウェアが持つ機能の名前を並べ替えて返します。いまは `"image"`、`"keyboard"`、`"mesh"`、`"overlay"`、`"phys"`、`"sprite"`、`"tile"`、`"touch_points"`、`"video"`、
 無線モードが Wi-Fi のときは `"wifi"`。アプリは `"phys" in cyd.features()` のように確かめてから使えます。
 
 #### `cyd.last_error()` → `str` または `None`
@@ -638,3 +639,29 @@ while cyd.update():
 `clear` は背景色。前の `cyd.sprite_present()` から積んだオーバーレイを一番上に描き、積んだ分は空になります。
 命令の数を返します。シーンの画面が閉じられた後は -1。正しくない命令があると `ValueError` で、画面は前のフレームのままです。
 24×24 と 16×16 のスプライト 64 個を回転・拡大・合成付きで描くと、約 10 fps です（実機で測定）。
+
+## 14. ゲーム画面のメッシュ（API レベル 11 以降）
+
+小さなメッシュをゲーム画面（`cyd.game_begin()`）に平らな三角形として投影し、面の平均の奥行きで奥から順に並べます。
+Android 版（IS01 / 12HT）の `load_mesh` / `game_meshes` と同じです。
+
+```python
+ship = cyd.load_mesh("ship.mesh")
+camera = (0, 0, 0, 0, 0, 0, 210, False)
+instances = [[ship, 0, 0, 250, 0, 0, 0, 1.0]]
+cyd.game_begin()
+while cyd.update():
+    cyd.game_frame(frame)
+    instances[0][4] += 0.05                     # yaw
+    cyd.game_meshes(camera, instances)
+```
+
+#### `cyd.load_mesh(name)` → `bytes`
+アプリのフォルダにあるメッシュを読み、`cyd.game_meshes()` に渡すバイト列を返します。形式は、頂点の数と面の数（`"<HH"`）、
+頂点ごとに `"<hhh"`、面ごとに `"<HB4B"`（RGB565 の色、角の数 3 か 4、角の頂点番号 4 個）。頂点・面とも 256 まで。
+
+#### `cyd.game_meshes(camera, instances)` → `int`
+`camera` は (x, y, z, yaw, pitch, roll, 焦点距離ピクセル, ワイヤーフレーム)。z の正が前方です。`instances` は
+(メッシュ, x, y, z, yaw, pitch, roll, 倍率) を 32 個まで。角度はラジアン。画面に裏を向けた面は（ワイヤーフレームでなければ）描かず、
+近クリップ面（カメラ座標の z = 14）にかかる面は面ごと除きます。三角形は `cyd.game_triangle()` と同じ 1 フレーム 256 個の枠を使い、
+置けた数を返します。あふれた分は `cyd.game_draw_stats()` の断られた三角形に数えます。交差する面の前後は、面の平均の奥行きで決まります。

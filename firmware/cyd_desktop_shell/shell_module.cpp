@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <cstring>
 
 extern "C" {
@@ -8,6 +9,7 @@ extern "C" {
 
 #include "shell_state.h"
 #include "phys_engine.h"
+#include "mesh_engine.h"
 #include "screen/keyboard.h"
 
 extern "C" void cyd_desktop_sd_set_boot_error(int error);
@@ -22,6 +24,7 @@ extern "C" void cyd_desktop_game_frame(uint32_t frame_number, uint32_t score, in
 extern "C" bool cyd_desktop_game_sprite(int kind, int x, int y, int color, int size);
 extern "C" bool cyd_desktop_game_triangle(int x0, int y0, int x1, int y1, int x2, int y2, int color, int flags);
 extern "C" void cyd_desktop_game_draw_stats(int out[4]);
+extern "C" void cyd_desktop_game_note_dropped_triangles(int count);
 extern "C" bool cyd_desktop_game_image_set(int slot, const uint16_t *pixels, int width, int height);
 extern "C" bool cyd_desktop_game_bitmap(int slot, int x, int y, int scale, int flags);
 extern "C" void cyd_desktop_overlay_clear(void);
@@ -260,6 +263,57 @@ mp_obj_t overlay_add(size_t, const mp_obj_t *args) {
                                                    mp_obj_get_int(args[9])));
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(overlay_add_obj, 10, 10, overlay_add);
+
+// game_meshes(camera, instances) (API level 11): project meshes into the game
+// frame's triangles. camera is (x, y, z, yaw, pitch, roll, focal, wire);
+// each instance is (mesh_bytes, x, y, z, yaw, pitch, roll, scale).
+mp_obj_t game_meshes(mp_obj_t camera_obj, mp_obj_t instances_obj) {
+    namespace mesh = cyd::desktop::mesh;
+    mp_obj_t *camera_items, *instance_items;
+    size_t instance_count = 0;
+    mp_obj_get_array_fixed_n(camera_obj, 8, &camera_items);
+    mp_obj_get_array(instances_obj, &instance_count, &instance_items);
+    if (instance_count > static_cast<size_t>(mesh::kMaxInstances))
+        mp_raise_ValueError(MP_ERROR_TEXT("too many mesh instances"));
+    mesh::Camera camera{};
+    float *fields[] = {&camera.x, &camera.y, &camera.z, &camera.yaw, &camera.pitch, &camera.roll, &camera.focal};
+    for (int index = 0; index < 7; ++index) *fields[index] = static_cast<float>(mp_obj_get_float(camera_items[index]));
+    camera.wire = mp_obj_is_true(camera_items[7]);
+    mesh::Instance instances[mesh::kMaxInstances];
+    for (size_t index = 0; index < instance_count; ++index) {
+        mp_obj_t *item;
+        mp_obj_get_array_fixed_n(instance_items[index], 8, &item);
+        mp_buffer_info_t buffer;
+        mp_get_buffer_raise(item[0], &buffer, MP_BUFFER_READ);
+        mesh::Instance &instance = instances[index];
+        instance.data = static_cast<const uint8_t *>(buffer.buf);
+        instance.size = buffer.len;
+        float *values[] = {&instance.x, &instance.y, &instance.z, &instance.yaw, &instance.pitch, &instance.roll,
+                           &instance.scale};
+        for (int field = 0; field < 7; ++field) *values[field] = static_cast<float>(mp_obj_get_float(item[field + 1]));
+    }
+    constexpr int kCapacity = 256;
+    auto *triangles = static_cast<mesh::Triangle *>(std::malloc(sizeof(mesh::Triangle) * kCapacity));
+    if (triangles == nullptr) mp_raise_msg(&mp_type_MemoryError, MP_ERROR_TEXT("mesh triangles"));
+    int dropped = 0;
+    const int count = mesh::project(camera, instances, static_cast<int>(instance_count), triangles, kCapacity, &dropped);
+    if (count < 0) {
+        std::free(triangles);
+        if (count == mesh::kNoMemory) mp_raise_msg(&mp_type_MemoryError, MP_ERROR_TEXT("mesh scene"));
+        if (count == mesh::kBadTransform) mp_raise_ValueError(MP_ERROR_TEXT("invalid mesh transform"));
+        if (count == mesh::kTooMany) mp_raise_ValueError(MP_ERROR_TEXT("mesh scene face budget"));
+        mp_raise_ValueError(MP_ERROR_TEXT("invalid mesh"));
+    }
+    int added = 0;
+    for (int index = 0; index < count; ++index) {
+        const mesh::Triangle &t = triangles[index];
+        if (cyd_desktop_game_triangle(t.x0, t.y0, t.x1, t.y1, t.x2, t.y2, t.color, t.wire ? 1 : 0)) ++added;
+    }
+    std::free(triangles);
+    cyd_desktop_game_note_dropped_triangles(dropped);
+    return MP_OBJ_NEW_SMALL_INT(added);
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(game_meshes_obj, game_meshes);
 
 // Sprite scene (API level 10).
 mp_obj_t scene_begin() { return mp_obj_new_int(cyd_desktop_scene_begin()); }
@@ -664,6 +718,7 @@ const mp_rom_map_elem_t globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_game_bitmap), MP_ROM_PTR(&game_bitmap_obj)},
     {MP_ROM_QSTR(MP_QSTR_overlay_clear), MP_ROM_PTR(&overlay_clear_obj)},
     {MP_ROM_QSTR(MP_QSTR_overlay_add), MP_ROM_PTR(&overlay_add_obj)},
+    {MP_ROM_QSTR(MP_QSTR_game_meshes), MP_ROM_PTR(&game_meshes_obj)},
     {MP_ROM_QSTR(MP_QSTR_scene_begin), MP_ROM_PTR(&scene_begin_obj)},
     {MP_ROM_QSTR(MP_QSTR_scene_end), MP_ROM_PTR(&scene_end_obj)},
     {MP_ROM_QSTR(MP_QSTR_scene_image), MP_ROM_PTR(&scene_image_obj)},

@@ -32,6 +32,7 @@ TESTS=(
   "dirty_rects_test.cpp:"
   "phys_engine_test.cpp:phys_engine.cpp"
   "scene_engine_test.cpp:scene_engine.cpp"
+  "mesh_engine_test.cpp:mesh_engine.cpp"
 )
 
 failures=0

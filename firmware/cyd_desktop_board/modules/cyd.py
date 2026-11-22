@@ -19,7 +19,7 @@ from _cyd_shell import (app_button, app_clear, app_event, app_log, app_primitive
                          scene_begin as _scene_begin, scene_end as _scene_end, scene_image as _scene_image,
                          scene_overlay_clear as _scene_overlay_clear,
                          scene_overlay_add as _scene_overlay_add, scene_present as _scene_present,
-                         buffer_copy as _buffer_copy,
+                         buffer_copy as _buffer_copy, game_meshes as _game_meshes,
                           game_touch as _game_touch, runtime_keepalive,
                           runtime_ping as _runtime_ping,
                           video_begin as _video_begin, video_present as _video_present,
@@ -784,6 +784,7 @@ def game_draw_stats():
 # (feature name, the function whose presence means the feature works here)
 _FEATURE_FUNCS = (
     ("keyboard", "keyboard_connected"),
+    ("mesh", "game_meshes"),
     ("image", "load_image"),
     ("overlay", "overlay_text"),
     ("phys", "phys_step"),
@@ -1100,3 +1101,46 @@ def sprite_present(commands, clear=BLACK):
     if result < 0:
         raise OSError(_SCENE_ERRORS.get(result, str(result)))
     return result
+
+
+# ---- Meshes in the game view (API level 11) ---------------------------------
+# The IS01 / 12HT port's load_mesh / game_meshes: small packed meshes projected
+# onto the game frame as flat triangles, sorted back to front by face depth.
+
+MESH_VERTICES = 256
+MESH_FACES = 256
+MESH_INSTANCES = 32
+
+
+def load_mesh(name):
+    """Read a packed mesh from this app's folder and return its bytes for game_meshes().
+
+    The format is "<HH" vertex and face counts, "<hhh" per vertex and "<HB4B"
+    per face (RGB565 colour, 3 or 4 corners, corner indexes).
+    """
+    limit = 4 + MESH_VERTICES * 6 + MESH_FACES * 7
+    try:
+        with open(_app_file(name), "rb") as source:
+            data = source.read(limit + 1)
+        if not 4 <= len(data) <= limit:
+            raise ValueError("mesh file size out of range")
+    except Exception as error:
+        _report(False, error)
+        raise
+    _report(True, "")
+    return data
+
+
+def game_meshes(camera, instances):
+    """Project meshes into this game frame's triangles; return how many were queued.
+
+    camera is (x, y, z, yaw, pitch, roll, focal_px, wire); positive z is ahead.
+    Each instance is (mesh, x, y, z, yaw, pitch, roll, scale), angles in
+    radians, up to MESH_INSTANCES. Faces turned away are skipped unless wire,
+    a face crossing the near plane (z 14) is dropped, and the triangles share
+    the game frame's 256 with game_triangle().
+    """
+    count = _game_meshes(camera, instances)
+    if count:
+        _mark_dirty()
+    return count

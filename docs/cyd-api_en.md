@@ -160,7 +160,7 @@ which starts at y = 212. Colors are RGB565 integers; use `cyd.rgb()` to create t
 
 | Name | Value |
 | --- | --- |
-| `cyd.API_LEVEL` | API level supplied by the firmware; currently 10 |
+| `cyd.API_LEVEL` | API level supplied by the firmware; currently 11 |
 | `cyd.BLACK` `cyd.NAVY` `cyd.BLUE` `cyd.GREEN` `cyd.CYAN` `cyd.RED` `cyd.MAGENTA` `cyd.ORANGE` `cyd.YELLOW` `cyd.WHITE` | RGB565 colors |
 | `cyd.GAME_PLAYER` `cyd.GAME_ENEMY` `cyd.GAME_BULLET` `cyd.GAME_SHOT` `cyd.GAME_SPARK` | Sprite kinds, 0–4 |
 | `cyd.TILE_FLIP_X` `cyd.TILE_FLIP_Y` `cyd.TILE_BEHIND` | `cyd.tile_sprite()` flags (1, 2, 4) |
@@ -171,6 +171,7 @@ which starts at y = 212. Colors are RGB565 integers; use `cyd.rgb()` to create t
 | `cyd.IMAGE_CAP` `cyd.OVERLAY_CAP` | Image limit (16) and overlay items per frame (24) |
 | `cyd.SPRITE_CAP` `cyd.SPRITE_ITEMS` `cyd.SPRITE_RECORD` | Scene sprite images (32), commands per frame (128), bytes per command (22) |
 | `cyd.BLEND_NORMAL` `cyd.BLEND_ADD` `cyd.BLEND_SUBTRACT` `cyd.BLEND_MULTIPLY` | `cyd.sprite_present()` blend modes (0–3) |
+| `cyd.MESH_VERTICES` `cyd.MESH_FACES` `cyd.MESH_INSTANCES` | Vertices (256) and faces (256) per mesh, instances (32) per `cyd.game_meshes()` |
 | `cyd.HTTP_MAX_BYTES` | HTTP response size limit: 32,768 bytes |
 
 ### 3.2 Capacity limits
@@ -575,7 +576,7 @@ Return `sqrt(x*x + y*y)`.
 
 #### `cyd.features()` → `tuple`
 
-The sorted names of the features this firmware has: currently `"image"`, `"keyboard"`, `"overlay"`, `"phys"`, `"sprite"`, `"tile"`, `"touch_points"`,
+The sorted names of the features this firmware has: currently `"image"`, `"keyboard"`, `"mesh"`, `"overlay"`, `"phys"`, `"sprite"`, `"tile"`, `"touch_points"`,
 `"video"`, and `"wifi"` when the radio mode is Wi-Fi. Apps can check `"phys" in cyd.features()` before
 using a feature.
 
@@ -729,3 +730,34 @@ Draw one frame from `commands`: up to 128 records of 22 bytes, each `struct` `"<
 top, and the queue then starts empty. Returns the number of records, or -1 once the scene view has been
 closed. An invalid record raises `ValueError` and leaves the previous frame on screen. Sixty-four rotated,
 scaled and blended 24×24 and 16×16 sprites run at about 10 fps on the board.
+
+## 14. Meshes in the game view (API level 11 and later)
+
+Small meshes projected onto the game view (`cyd.game_begin()`) as flat triangles, sorted back to front by
+average face depth. The same as the Android (IS01 / 12HT) port's `load_mesh` / `game_meshes`.
+
+```python
+ship = cyd.load_mesh("ship.mesh")
+camera = (0, 0, 0, 0, 0, 0, 210, False)
+instances = [[ship, 0, 0, 250, 0, 0, 0, 1.0]]
+cyd.game_begin()
+while cyd.update():
+    cyd.game_frame(frame)
+    instances[0][4] += 0.05                     # yaw
+    cyd.game_meshes(camera, instances)
+```
+
+#### `cyd.load_mesh(name)` → `bytes`
+
+Read a mesh from the app's folder and return the bytes to pass to `cyd.game_meshes()`. The format is the
+vertex and face counts (`"<HH"`), `"<hhh"` per vertex and `"<HB4B"` per face (RGB565 colour, 3 or 4
+corners, four corner indexes); up to 256 vertices and 256 faces.
+
+#### `cyd.game_meshes(camera, instances)` → `int`
+
+`camera` is (x, y, z, yaw, pitch, roll, focal length in pixels, wire frame); positive z is ahead.
+`instances` holds up to 32 (mesh, x, y, z, yaw, pitch, roll, scale); angles are in radians. Faces turned
+away from the screen are skipped unless wire frame, and a face crossing the near plane (camera z 14) is
+dropped. The triangles share the 256 per frame of `cyd.game_triangle()`; returns how many were queued, and
+the overflow counts as refused triangles in `cyd.game_draw_stats()`. Intersecting faces are ordered by
+their average depth.
