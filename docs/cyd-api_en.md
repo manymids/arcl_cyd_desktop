@@ -630,7 +630,8 @@ nearest the origin.
 ## 12. Images and overlay (API level 9 and later)
 
 Game rendering (`cyd.game_begin()`) gains the app's own images and text and rectangles drawn on top. The
-calls match the Android (IS01 / 12HT) port.
+calls match the Android (IS01 / 12HT) port. `examples/bounce_lab` (`npm run install:bounce`) uses physics,
+images, the overlay, `cyd.touch_edge()` and `cyd.key_state()` together.
 
 ```python
 cyd.game_begin()

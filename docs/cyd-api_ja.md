@@ -551,7 +551,8 @@ while cyd.update():
 ## 12. 画像とオーバーレイ（API レベル 9 以降）
 
 ゲーム描画（`cyd.game_begin()`）に、アプリの画像と、画面の上に重ねる文字・長方形を足します。
-Android 版（IS01 / 12HT）と同じ呼び方です。
+Android 版（IS01 / 12HT）と同じ呼び方です。物理演算・画像・オーバーレイ・`cyd.touch_edge()`・`cyd.key_state()` を
+まとめて使う例が `examples/bounce_lab` です（`npm run install:bounce`）。
 
 ```python
 cyd.game_begin()
