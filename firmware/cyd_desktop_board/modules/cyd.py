@@ -11,6 +11,9 @@ from _cyd_shell import (app_button, app_clear, app_event, app_log, app_primitive
                          game_frame as _game_frame, game_sprite as _game_sprite,
                          game_triangle as _game_triangle, draw_triangle as _draw_triangle,
                          game_draw_stats as _game_draw_stats,
+                         phys_reset as _phys_reset, phys_body as _phys_body,
+                         phys_velocity as _phys_velocity, phys_step as _phys_step,
+                         phys_state as _phys_state,
                           game_touch as _game_touch, runtime_keepalive,
                           runtime_ping as _runtime_ping,
                           video_begin as _video_begin, video_present as _video_present,
@@ -663,6 +666,8 @@ def _compat_reset():
     _keys_previous = ()
     _key_edges = {}
     _last_error = None
+    # The physics world is native and outlives the app; start each app empty.
+    _phys_reset(3, 0.0, -520.0, 0.0)
 
 
 def _report(ok, reason):
@@ -767,6 +772,7 @@ def game_draw_stats():
 # (feature name, the function whose presence means the feature works here)
 _FEATURE_FUNCS = (
     ("keyboard", "keyboard_connected"),
+    ("phys", "phys_step"),
     ("tile", "tile_begin"),
     ("touch_points", "touch_points"),
     ("video", "video_begin"),
@@ -785,3 +791,58 @@ def features():
 def last_error():
     """Return why the last init/load call failed, or None."""
     return _last_error
+
+
+# ---- Physics (API level 8) --------------------------------------------------
+# Spheres, axis-aligned boxes and infinite planes, without rotation. The native
+# engine integrates and collides them; the app places bodies and draws the
+# poses phys_state() reports. Same API as the IS01 / 12HT port.
+
+PHYS_CAP = 48
+PHYS_STRIDE = 40
+PHYS_SPHERE = 1
+PHYS_BOX = 2
+PHYS_PLANE = 3
+
+
+def phys_reset(dim=3, gravity=(0.0, -520.0, 0.0)):
+    """Clear the physics world. dim is 2 or 3; gravity is in units per second squared."""
+    _phys_reset(int(dim), float(gravity[0]), float(gravity[1]), float(gravity[2]))
+
+
+def phys_body(body_id, shape, pos, size, mass=1.0, restitution=0.3, friction=0.4):
+    """Place or replace one body and return its slot id (0..PHYS_CAP-1).
+
+    sphere: size is the radius. box: size is (hx, hy, hz) half-extents.
+    plane: pos is a point on the plane and size its normal (nx, ny, nz); bodies
+    stay on the side the normal points to. mass <= 0 makes the body static.
+    shape 0 removes the body. Raises ValueError for a bad slot or shape.
+    """
+    shape = int(shape)
+    if shape == PHYS_SPHERE:
+        hx, hy, hz = float(size), 0.0, 0.0
+    elif shape == 0:
+        hx = hy = hz = 0.0
+    else:
+        hx, hy, hz = float(size[0]), float(size[1]), float(size[2])
+    return _phys_body(int(body_id), shape, float(pos[0]), float(pos[1]), float(pos[2]),
+                      hx, hy, hz, float(mass), float(restitution), float(friction))
+
+
+def phys_velocity(body_id, vel):
+    """Set a dynamic body's velocity. False for a static or empty slot."""
+    return bool(_phys_velocity(int(body_id), float(vel[0]), float(vel[1]), float(vel[2])))
+
+
+def phys_step(dt):
+    """Advance the simulation by dt seconds. Returns the number of contacts."""
+    return _phys_step(float(dt))
+
+
+def phys_state(buf):
+    """Write PHYS_CAP records of PHYS_STRIDE bytes into buf; return the active body count.
+
+    Each record is struct "<9fBBBB": x, y, z, vx, vy, vz, hx, hy, hz, shape,
+    flags, id, active. flags bit 0 is set for a dynamic body.
+    """
+    return _phys_state(buf)

@@ -128,7 +128,7 @@ def test_misc():
     shell.radio = "off"
     names = cyd.features()
     assert names == tuple(sorted(names))
-    assert {"keyboard", "tile", "touch_points", "video"} <= set(names)
+    assert {"keyboard", "phys", "tile", "touch_points", "video"} <= set(names)
     assert "wifi" not in names
     shell.radio = "wifi"
     assert "wifi" in cyd.features()

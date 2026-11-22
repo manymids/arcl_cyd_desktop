@@ -160,11 +160,13 @@ which starts at y = 212. Colors are RGB565 integers; use `cyd.rgb()` to create t
 
 | Name | Value |
 | --- | --- |
-| `cyd.API_LEVEL` | API level supplied by the firmware; currently 7 |
+| `cyd.API_LEVEL` | API level supplied by the firmware; currently 8 |
 | `cyd.BLACK` `cyd.NAVY` `cyd.BLUE` `cyd.GREEN` `cyd.CYAN` `cyd.RED` `cyd.MAGENTA` `cyd.ORANGE` `cyd.YELLOW` `cyd.WHITE` | RGB565 colors |
 | `cyd.GAME_PLAYER` `cyd.GAME_ENEMY` `cyd.GAME_BULLET` `cyd.GAME_SHOT` `cyd.GAME_SPARK` | Sprite kinds, 0–4 |
 | `cyd.TILE_FLIP_X` `cyd.TILE_FLIP_Y` `cyd.TILE_BEHIND` | `cyd.tile_sprite()` flags (1, 2, 4) |
 | `cyd.KEY_DOWN` `cyd.KEY_PRESSED` `cyd.KEY_RELEASED` | Bits returned by `cyd.key_state()` (1, 2, 4) |
+| `cyd.PHYS_SPHERE` `cyd.PHYS_BOX` `cyd.PHYS_PLANE` | `cyd.phys_body()` shapes (1, 2, 3) |
+| `cyd.PHYS_CAP` `cyd.PHYS_STRIDE` | Body limit (48) and bytes per `cyd.phys_state()` record (40) |
 | `cyd.HTTP_MAX_BYTES` | HTTP response size limit: 32,768 bytes |
 
 ### 3.2 Capacity limits
@@ -567,10 +569,56 @@ Return `sqrt(x*x + y*y)`.
 
 #### `cyd.features()` → `tuple`
 
-The sorted names of the features this firmware has: currently `"keyboard"`, `"tile"`, `"touch_points"`,
+The sorted names of the features this firmware has: currently `"keyboard"`, `"phys"`, `"tile"`, `"touch_points"`,
 `"video"`, and `"wifi"` when the radio mode is Wi-Fi. Apps can check `"phys" in cyd.features()` before
 using a feature.
 
 #### `cyd.last_error()` → `str` or `None`
 
 Why the last load or init call failed; `None` after a success and at the start of every app.
+
+## 11. Physics (API level 8 and later)
+
+Spheres, axis-aligned boxes and infinite planes, without rotation. The native engine integrates and
+collides them; the app places bodies and draws the poses `cyd.phys_state()` reports. The API matches the
+Android (IS01 / 12HT) port. The world starts empty for every app, with gravity `(0, -520, 0)`.
+
+```python
+import struct
+cyd.phys_reset(2, (0, 400, 0))                  # 2D, gravity pointing down the screen
+cyd.phys_body(0, cyd.PHYS_PLANE, (0, 200, 0), (0, -1, 0), mass=0)   # floor at y=200
+cyd.phys_body(1, cyd.PHYS_SPHERE, (160, 40, 0), 8, restitution=0.6)
+state = bytearray(cyd.PHYS_CAP * cyd.PHYS_STRIDE)
+while cyd.update():
+    cyd.phys_step(1 / 30)
+    cyd.phys_state(state)
+    x, y = struct.unpack_from("<2f", state, 1 * cyd.PHYS_STRIDE)
+```
+
+#### `cyd.phys_reset(dim=3, gravity=(0.0, -520.0, 0.0))`
+
+Empty the world. `dim` is 2 or 3; with 2, z is always 0. `gravity` is in units per second squared.
+
+#### `cyd.phys_body(body_id, shape, pos, size, mass=1.0, restitution=0.3, friction=0.4)` → `int`
+
+Place or replace the body in slot `body_id` (0–47) and return the slot. For a sphere `size` is the
+radius, for a box the half-extents `(hx, hy, hz)`, for a plane `pos` is a point on it and `size` its
+normal (bodies stay on the side the normal points to). `mass` of 0 or less makes the body static, and
+`shape` 0 removes it. Raises `ValueError` for a bad slot or shape. A contact uses the smaller
+`restitution` and the smaller `friction` of the two bodies.
+
+#### `cyd.phys_velocity(body_id, vel)` → `bool`
+
+Set a dynamic body's velocity `(vx, vy, vz)`. `False` for a static body or an empty slot.
+
+#### `cyd.phys_step(dt)` → `int`
+
+Advance by `dt` seconds and return the number of contacts. With all 48 bodies one step takes about
+10 ms on the board.
+
+#### `cyd.phys_state(buf)` → `int`
+
+Write the 48 slots, in order, into `buf` (a `bytearray` of at least `cyd.PHYS_CAP * cyd.PHYS_STRIDE`
+bytes). Each record is `struct` `"<9fBBBB"`: x, y, z, vx, vy, vz, hx, hy, hz, shape, flags (bit 0 set
+for a dynamic body), id, active. Returns the number of active bodies. For a plane, x, y, z is its point
+nearest the origin.

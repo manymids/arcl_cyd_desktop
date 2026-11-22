@@ -30,6 +30,7 @@ TESTS=(
   "keyboard_layout_test.cpp:keyboard_layout.cpp"
   "key_input_test.cpp:key_input.cpp"
   "dirty_rects_test.cpp:"
+  "phys_engine_test.cpp:phys_engine.cpp"
 )
 
 failures=0

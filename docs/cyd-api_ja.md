@@ -154,11 +154,13 @@ cyd.run()           # Home / Start / 長押しで抜ける
 
 | 名前 | 値 |
 |---|---|
-| `cyd.API_LEVEL` | ファームウェアが提供する API レベル（現在 7） |
+| `cyd.API_LEVEL` | ファームウェアが提供する API レベル（現在 8） |
 | `cyd.BLACK` `cyd.NAVY` `cyd.BLUE` `cyd.GREEN` `cyd.CYAN` `cyd.RED` `cyd.MAGENTA` `cyd.ORANGE` `cyd.YELLOW` `cyd.WHITE` | RGB565 の色 |
 | `cyd.GAME_PLAYER` `cyd.GAME_ENEMY` `cyd.GAME_BULLET` `cyd.GAME_SHOT` `cyd.GAME_SPARK` | スプライトの種類（0〜4） |
 | `cyd.TILE_FLIP_X` `cyd.TILE_FLIP_Y` `cyd.TILE_BEHIND` | `cyd.tile_sprite()` のフラグ（1、2、4） |
 | `cyd.KEY_DOWN` `cyd.KEY_PRESSED` `cyd.KEY_RELEASED` | `cyd.key_state()` が返すビット（1、2、4） |
+| `cyd.PHYS_SPHERE` `cyd.PHYS_BOX` `cyd.PHYS_PLANE` | `cyd.phys_body()` の形（1、2、3） |
+| `cyd.PHYS_CAP` `cyd.PHYS_STRIDE` | 物体の数の上限（48）と `cyd.phys_state()` の 1 件のバイト数（40） |
 | `cyd.HTTP_MAX_BYTES` | `cyd.http_get()` が受け取る本文の上限（32,768） |
 
 ### 3.2 上限
@@ -498,8 +500,46 @@ Android 版（IS01 / 12HT）の `cyd` と同じ名前・引数で使える補助
 `sqrt(x*x + y*y)` を返します。
 
 #### `cyd.features()` → `tuple`
-このファームウェアが持つ機能の名前を並べ替えて返します。いまは `"keyboard"`、`"tile"`、`"touch_points"`、`"video"`、
+このファームウェアが持つ機能の名前を並べ替えて返します。いまは `"keyboard"`、`"phys"`、`"tile"`、`"touch_points"`、`"video"`、
 無線モードが Wi-Fi のときは `"wifi"`。アプリは `"phys" in cyd.features()` のように確かめてから使えます。
 
 #### `cyd.last_error()` → `str` または `None`
 直前の読み込み・初期化が失敗した理由。成功すると `None` に戻ります。アプリが始まるたびに `None` になります。
+
+## 11. 物理演算（API レベル 8 以降）
+
+球・軸に平行な箱・無限平面を、回転なしで動かします。積分と衝突はネイティブ側が行い、アプリは物体を置いて、
+`cyd.phys_state()` が返す位置を描きます。Android 版（IS01 / 12HT）と同じ API です。
+世界はアプリが始まるたびに空になります（重力は `(0, -520, 0)`）。
+
+```python
+import struct
+cyd.phys_reset(2, (0, 400, 0))                  # 2D、画面下向きの重力
+cyd.phys_body(0, cyd.PHYS_PLANE, (0, 200, 0), (0, -1, 0), mass=0)   # y=200 の床
+cyd.phys_body(1, cyd.PHYS_SPHERE, (160, 40, 0), 8, restitution=0.6)
+state = bytearray(cyd.PHYS_CAP * cyd.PHYS_STRIDE)
+while cyd.update():
+    cyd.phys_step(1 / 30)
+    cyd.phys_state(state)
+    x, y = struct.unpack_from("<2f", state, 1 * cyd.PHYS_STRIDE)
+```
+
+#### `cyd.phys_reset(dim=3, gravity=(0.0, -520.0, 0.0))`
+世界を空にします。`dim` は 2 か 3。2 のとき z は常に 0 です。`gravity` の単位は 1 秒あたりの速度です。
+
+#### `cyd.phys_body(body_id, shape, pos, size, mass=1.0, restitution=0.3, friction=0.4)` → `int`
+スロット `body_id`（0〜47）に物体を置き直し、その番号を返します。球は `size` が半径、箱は `(hx, hy, hz)` の半分の大きさ、
+平面は `pos` が平面上の点で `size` が法線です（物体は法線の向く側にいます）。`mass` が 0 以下なら動きません。
+`shape` を 0 にするとそのスロットを消します。番号や形が正しくないと `ValueError`。
+跳ね返りは 2 つの物体の `restitution` の小さい方、摩擦は `friction` の小さい方を使います。
+
+#### `cyd.phys_velocity(body_id, vel)` → `bool`
+動く物体の速度 `(vx, vy, vz)` を設定します。動かない物体や空のスロットなら `False`。
+
+#### `cyd.phys_step(dt)` → `int`
+`dt` 秒進めます。接触している組の数を返します。物体 48 個で 1 回約 10 ms かかります（実機で測定）。
+
+#### `cyd.phys_state(buf)` → `int`
+`buf`（`cyd.PHYS_CAP * cyd.PHYS_STRIDE` バイト以上の `bytearray`）に、スロット順で 48 件を書きます。
+1 件は `struct` の `"<9fBBBB"`: x, y, z, vx, vy, vz, hx, hy, hz, 形, フラグ（bit 0 が動く物体）, 番号, 使用中。
+使用中の物体の数を返します。平面の x, y, z は原点に最も近い平面上の点です。

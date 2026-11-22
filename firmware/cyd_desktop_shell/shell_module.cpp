@@ -7,6 +7,7 @@ extern "C" {
 }
 
 #include "shell_state.h"
+#include "phys_engine.h"
 #include "screen/keyboard.h"
 
 extern "C" void cyd_desktop_sd_set_boot_error(int error);
@@ -207,6 +208,48 @@ mp_obj_t game_triangle(size_t n_args, const mp_obj_t *args) {
     return mp_obj_new_bool(cyd_desktop_game_triangle(x0, y0, x1, y1, x2, y2, color, flags));
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(game_triangle_obj, 7, 8, game_triangle);
+
+// Physics (API level 8): the engine integrates and collides; Python places
+// bodies and draws what phys_state() reports.
+mp_obj_t phys_reset_fn(size_t, const mp_obj_t *args) {
+    phys_reset(mp_obj_get_int(args[0]), static_cast<float>(mp_obj_get_float(args[1])),
+               static_cast<float>(mp_obj_get_float(args[2])), static_cast<float>(mp_obj_get_float(args[3])));
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(phys_reset_obj, 4, 4, phys_reset_fn);
+
+mp_obj_t phys_body_fn(size_t, const mp_obj_t *args) {
+    float values[9];
+    for (int index = 0; index < 9; ++index) values[index] = static_cast<float>(mp_obj_get_float(args[index + 2]));
+    const int id = phys_body(mp_obj_get_int(args[0]), mp_obj_get_int(args[1]), values[0], values[1], values[2],
+                             values[3], values[4], values[5], values[6], values[7], values[8]);
+    if (id < 0) mp_raise_ValueError(MP_ERROR_TEXT("invalid physics body"));
+    return MP_OBJ_NEW_SMALL_INT(id);
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(phys_body_obj, 11, 11, phys_body_fn);
+
+mp_obj_t phys_velocity_fn(size_t, const mp_obj_t *args) {
+    return mp_obj_new_bool(phys_velocity(mp_obj_get_int(args[0]), static_cast<float>(mp_obj_get_float(args[1])),
+                                         static_cast<float>(mp_obj_get_float(args[2])),
+                                         static_cast<float>(mp_obj_get_float(args[3]))));
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(phys_velocity_obj, 4, 4, phys_velocity_fn);
+
+mp_obj_t phys_step_fn(mp_obj_t dt) {
+    return MP_OBJ_NEW_SMALL_INT(phys_step(static_cast<float>(mp_obj_get_float(dt))));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(phys_step_obj, phys_step_fn);
+
+mp_obj_t phys_state_fn(mp_obj_t buffer_obj) {
+    mp_buffer_info_t buffer;
+    mp_get_buffer_raise(buffer_obj, &buffer, MP_BUFFER_WRITE);
+    phys_state_t slots[PHYS_CAP];
+    if (buffer.len < sizeof(slots)) mp_raise_ValueError(MP_ERROR_TEXT("physics state buffer is short"));
+    phys_copy_state(slots, PHYS_CAP);
+    std::memcpy(buffer.buf, slots, sizeof(slots));
+    return MP_OBJ_NEW_SMALL_INT(phys_active_count());
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(phys_state_obj, phys_state_fn);
 
 mp_obj_t game_draw_stats() {
     int stats[4]{};
@@ -505,6 +548,11 @@ const mp_rom_map_elem_t globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_game_sprite), MP_ROM_PTR(&game_sprite_obj)},
     {MP_ROM_QSTR(MP_QSTR_game_triangle), MP_ROM_PTR(&game_triangle_obj)},
     {MP_ROM_QSTR(MP_QSTR_game_draw_stats), MP_ROM_PTR(&game_draw_stats_obj)},
+    {MP_ROM_QSTR(MP_QSTR_phys_reset), MP_ROM_PTR(&phys_reset_obj)},
+    {MP_ROM_QSTR(MP_QSTR_phys_body), MP_ROM_PTR(&phys_body_obj)},
+    {MP_ROM_QSTR(MP_QSTR_phys_velocity), MP_ROM_PTR(&phys_velocity_obj)},
+    {MP_ROM_QSTR(MP_QSTR_phys_step), MP_ROM_PTR(&phys_step_obj)},
+    {MP_ROM_QSTR(MP_QSTR_phys_state), MP_ROM_PTR(&phys_state_obj)},
     {MP_ROM_QSTR(MP_QSTR_draw_triangle), MP_ROM_PTR(&draw_triangle_obj)},
     {MP_ROM_QSTR(MP_QSTR_game_touch), MP_ROM_PTR(&game_touch_obj)},
     {MP_ROM_QSTR(MP_QSTR_video_begin), MP_ROM_PTR(&video_begin_obj)},
