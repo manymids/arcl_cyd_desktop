@@ -32,6 +32,7 @@ class Shell:
         self.scene_images = {}
         self.scene_overlays = []
         self.presented = []
+        self.frames = []
 
     def game_touch(self):
         return self.touch
@@ -90,6 +91,12 @@ class Shell:
             return -2
         self.presented.append((bytes(records), background))
         return len(records) // 22
+
+    def n3d_frame(self, *args):
+        if self.scene != "front":
+            return -4
+        self.frames.append(args)
+        return 7
 
     def buffer_copy(self, destination, source):
         assert len(destination) == len(source)
@@ -270,6 +277,40 @@ def test_sprite_scene():
     assert "sprite" in cyd.features()
     cyd._set_app_root("next")
     assert shell.scene is None and cyd._sprites == [None] * cyd.SPRITE_CAP and not cyd._scene_used
+
+
+def test_n3d():
+    cyd._set_app_root("n3dtest")
+    model = cyd.n3d_pack_model([(0, 0, 0), (10, 0, 0), (0, 10, 0), (10, 10, 0)],
+                               [(0, 1, 2, 0), ((1, 3, 2), 0xF800, 1)])
+    count_v, count_f, radius, flags = struct.unpack_from("<HHhH", model, 0)
+    assert (count_v, count_f, flags) == (4, 2, 1) and radius == 15
+    assert len(model) == 8 + 4 * 6 + 2 * 18
+    first = struct.unpack_from("<BBHhhhHHHH", model, 8 + 24)
+    assert first[0] == 3 and first[2] == 0x0841, "colour 0 becomes 0x0841"
+    assert abs(first[5]) == 16384, "the normal is computed"
+    second = struct.unpack_from("<BBHhhhHHHH", model, 8 + 24 + 18)
+    assert second[:3] == (3, 1, 0xF800) and second[6:9] == (1, 3, 2)
+    packed = cyd._n3d_pack_items([(2, (1, -2, 300), (0, 1.5707963, 0), cyd.N3D_ENABLE | cyd.N3D_ADD, 512, 0x07E0, 99)])
+    fields = struct.unpack("<6H3iHBB", packed)
+    assert fields[:6] == (2, 5, 0, 16383, 0, 512)  # radians truncate, as on Android
+    assert fields[6:9] == (65536, -131072, 300 * 65536)
+    assert fields[9:] == (0x07E0, 99, 0)
+    assert cyd.n3d_present([(0, (0, 0, 0))], clear=5, light=(0, 0, -16384, 200)) == 7
+    args = shell.frames[-1]
+    assert len(args[0]) == 28 and args[1] is None and args[2] == 5 and args[3] is True
+    assert args[5] == (0, 0, -16384, 200) and args[4] is None and args[6] is None
+    for bad in [dict(stars=True), dict(stereo=True), dict(hud=(0,) * 9), dict(viewport_width=480)]:
+        try:
+            cyd.n3d_present(b"", **bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("accepted %r" % (bad,))
+    shell.scene = "left"
+    assert cyd.n3d_present(b"") == -1
+    assert "n3d" in cyd.features()
+    cyd._set_app_root("next")
 
 
 def main():

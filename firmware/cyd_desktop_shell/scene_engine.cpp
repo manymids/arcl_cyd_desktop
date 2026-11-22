@@ -60,6 +60,12 @@ struct Frame {
 
 Image images[kImageCapacity]{};
 Frame *frame = nullptr;
+// 3D: the polygon list and a Z buffer one band high, allocated by begin_3d().
+Poly *poly_list = nullptr;
+uint16_t *z_band = nullptr;
+int poly_count = 0;
+bool z_enabled = true;
+constexpr int kBandRows = 16;
 
 uint16_t read_u16(const uint8_t *bytes) { return static_cast<uint16_t>(bytes[0] | (bytes[1] << 8)); }
 int16_t read_i16(const uint8_t *bytes) { return static_cast<int16_t>(read_u16(bytes)); }
@@ -221,6 +227,161 @@ void draw_item(const native::TileSurface &surface, const Item &item) {
     }
 }
 
+// As native_3d.c's n3d_blend: additive scales the source by alpha.
+uint16_t blend_3d(uint16_t source, uint16_t destination, int alpha, bool add) {
+    if (!add && alpha >= 255) return source;
+    if (alpha <= 0) return destination;
+    const int sr = (source >> 11) & 0x1f, sg = (source >> 5) & 0x3f, sb = source & 0x1f;
+    const int dr = (destination >> 11) & 0x1f, dg = (destination >> 5) & 0x3f, db = destination & 0x1f;
+    int r, g, b;
+    if (add) {
+        r = std::min(31, dr + sr * alpha / 255);
+        g = std::min(63, dg + sg * alpha / 255);
+        b = std::min(31, db + sb * alpha / 255);
+    } else {
+        r = (sr * alpha + dr * (255 - alpha)) / 255;
+        g = (sg * alpha + dg * (255 - alpha)) / 255;
+        b = (sb * alpha + db * (255 - alpha)) / 255;
+    }
+    return static_cast<uint16_t>((r << 11) | (g << 5) | b);
+}
+
+void plot_3d(const native::TileSurface &surface, int x, int y, const Poly &poly) {
+    uint16_t &pixel = surface.pixels[static_cast<std::size_t>(y - surface.origin_y) * surface.stride + x];
+    const bool add = (poly.flags & kPolyAdd) != 0;
+    pixel = native::byte_swap(blend_3d(poly.color, native::byte_swap(pixel), poly.alpha, add));
+}
+
+// One span of a filled polygon, x1 open, as native_3d.c's fill_span.
+void fill_span_3d(const native::TileSurface &surface, int y, int x0, int x1, int32_t z0, int32_t z1,
+                  const Poly &poly) {
+    const int span = x1 - x0;
+    if (span <= 0) return;
+    const int32_t dz = static_cast<int32_t>((static_cast<int64_t>(z1 - z0) << 16) / span);
+    uint32_t z = static_cast<uint32_t>(z0) << 16;
+    if (x0 < 0) {
+        z += static_cast<uint32_t>(dz * (0 - x0));
+        x0 = 0;
+    }
+    if (x1 > kWidth) x1 = kWidth;
+    if (x0 >= x1) return;
+    const bool test = z_enabled && !(poly.flags & kPolyNoZTest);
+    const bool write = test && !(poly.flags & kPolyNoZWrite);
+    const bool add = (poly.flags & kPolyAdd) != 0;
+    const bool solid = !add && poly.alpha >= 255;
+    uint16_t *row = surface.pixels + static_cast<std::size_t>(y - surface.origin_y) * surface.stride;
+    uint16_t *depth = z_band + static_cast<std::size_t>(y - surface.origin_y) * kWidth;
+    const uint16_t swapped = native::byte_swap(poly.color);
+    for (int x = x0; x < x1; ++x, z += static_cast<uint32_t>(dz)) {
+        if (test) {
+            const uint16_t key = static_cast<uint16_t>(z >> 16);
+            if (key <= depth[x]) continue;
+            if (write) depth[x] = key;
+        }
+        row[x] = solid ? swapped
+                       : native::byte_swap(blend_3d(poly.color, native::byte_swap(row[x]), poly.alpha, add));
+    }
+}
+
+// Wire frame edges: clipped to the screen, then Bresenham, no depth test.
+void line_3d(const native::TileSurface &surface, int x0, int y0, int x1, int y1, const Poly &poly) {
+    const double ax = x0, ay = y0, vx = static_cast<double>(x1) - x0, vy = static_cast<double>(y1) - y0;
+    const double p[4] = {-vx, vx, -vy, vy};
+    const double q[4] = {ax, kWidth - 1 - ax, ay, kHeight - 1 - ay};
+    double t0 = 0, t1 = 1;
+    for (int k = 0; k < 4; ++k) {
+        if (p[k] == 0) {
+            if (q[k] < 0) return;
+            continue;
+        }
+        const double t = q[k] / p[k];
+        if (p[k] < 0) t0 = std::max(t0, t);
+        else t1 = std::min(t1, t);
+        if (t0 > t1) return;
+    }
+    x0 = static_cast<int>(ax + t0 * vx);
+    y0 = static_cast<int>(ay + t0 * vy);
+    x1 = static_cast<int>(ax + t1 * vx);
+    y1 = static_cast<int>(ay + t1 * vy);
+    const int band_top = surface.origin_y, band_bottom = surface.origin_y + surface.height;
+    if (std::max(y0, y1) < band_top || std::min(y0, y1) >= band_bottom) return;
+    const int dx = std::abs(x1 - x0), dy = -std::abs(y1 - y0);
+    const int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+    int error = dx + dy;
+    for (;;) {
+        if (y0 >= band_top && y0 < band_bottom && x0 >= 0 && x0 < kWidth) plot_3d(surface, x0, y0, poly);
+        if (x0 == x1 && y0 == y1) break;
+        const int twice = error * 2;
+        if (twice >= dy) {
+            error += dy;
+            x0 += sx;
+        }
+        if (twice <= dx) {
+            error += dx;
+            y0 += sy;
+        }
+    }
+}
+
+// A convex polygon's rows inside this band, as native_3d.c's DrawPoly.
+void draw_poly(const native::TileSurface &surface, const Poly &poly) {
+    if (poly.alpha == 0 || poly.count < 2) return;
+    if (poly.flags & kPolyWire) {
+        for (int i = 0; i < poly.count; ++i) {
+            const int j = (i + 1) % poly.count;
+            line_3d(surface, poly.x[i], poly.y[i], poly.x[j], poly.y[j], poly);
+        }
+        return;
+    }
+    if (poly.count < 3) return;
+    int top = poly.y[0], bottom = poly.y[0];
+    for (int i = 1; i < poly.count; ++i) {
+        top = std::min<int>(top, poly.y[i]);
+        bottom = std::max<int>(bottom, poly.y[i]);
+    }
+    top = std::max(top, std::max(0, surface.origin_y));
+    bottom = std::min(bottom, std::min(kHeight, surface.origin_y + surface.height));
+    if (top >= bottom) return;
+    struct Edge {
+        int32_t y0, y1;
+        int64_t x, dx, z, dz;  // at y0, Q16
+    } edges[kPolyVertices];
+    int edge_count = 0;
+    for (int i = 0; i < poly.count; ++i) {
+        const int j = (i + 1) % poly.count;
+        if (poly.y[i] == poly.y[j]) continue;
+        const int a = poly.y[i] < poly.y[j] ? i : j, b = a == i ? j : i;
+        if (poly.y[b] <= top || poly.y[a] >= bottom) continue;
+        const int64_t height = poly.y[b] - poly.y[a];
+        Edge &edge = edges[edge_count++];
+        edge.y0 = poly.y[a];
+        edge.y1 = poly.y[b];
+        edge.dx = (static_cast<int64_t>(poly.x[b] - poly.x[a]) << 16) / height;
+        edge.dz = (static_cast<int64_t>(poly.z[b] - poly.z[a]) << 16) / height;
+        edge.x = static_cast<int64_t>(poly.x[a]) << 16;
+        edge.z = static_cast<int64_t>(poly.z[a]) << 16;
+    }
+    for (int y = top; y < bottom; ++y) {
+        int32_t left = INT32_MAX, right = INT32_MIN, z_left = 0, z_right = 0;
+        for (int i = 0; i < edge_count; ++i) {
+            const Edge &edge = edges[i];
+            if (y < edge.y0 || y >= edge.y1) continue;
+            const int32_t x = static_cast<int32_t>((edge.x + edge.dx * (y - edge.y0)) >> 16);
+            const int32_t z = static_cast<int32_t>((edge.z + edge.dz * (y - edge.y0)) >> 16);
+            if (x < left) {
+                left = x;
+                z_left = z;
+            }
+            if (x > right) {
+                right = x;
+                z_right = z;
+            }
+        }
+        if (left == INT32_MAX) continue;
+        fill_span_3d(surface, y, left, right + 1, z_left, z_right, poly);
+    }
+}
+
 void fill_box(const native::TileSurface &surface, int x, int y, int width, int height, uint16_t color) {
     for (int row = std::max(y, surface.origin_y);
          row < std::min(y + height, surface.origin_y + surface.height); ++row)
@@ -270,9 +431,23 @@ bool begin() {
     return frame != nullptr;
 }
 
+bool begin_3d() {
+    if (frame == nullptr) return false;
+    if (poly_list == nullptr) poly_list = static_cast<Poly *>(std::calloc(kPolyCapacity, sizeof(Poly)));
+    if (z_band == nullptr) z_band = static_cast<uint16_t *>(std::calloc(kWidth * kBandRows, sizeof(uint16_t)));
+    return poly_list != nullptr && z_band != nullptr;
+}
+
+Poly *polys() { return poly_list; }
+
 void end() {
     std::free(frame);
     frame = nullptr;
+    std::free(poly_list);
+    poly_list = nullptr;
+    std::free(z_band);
+    z_band = nullptr;
+    poly_count = 0;
     for (Image &image : images) image = Image{};
 }
 
@@ -316,8 +491,16 @@ bool overlay_add(int kind, int x, int y, int width, int height, uint16_t color,
     return true;
 }
 
-int prepare(const uint8_t *records, std::size_t size, uint16_t background) {
+bool valid_records(const uint8_t *records, std::size_t size) {
+    if (size % kRecordBytes != 0 || size / kRecordBytes > static_cast<std::size_t>(kItemCapacity)) return false;
+    for (std::size_t offset = 0; offset < size; offset += kRecordBytes)
+        if (!valid(records + offset)) return false;
+    return true;
+}
+
+int prepare(const uint8_t *records, std::size_t size, uint16_t background, int polygons, bool z_buffer) {
     if (frame == nullptr) return kNotReady;
+    if (polygons < 0 || polygons > kPolyCapacity || (polygons > 0 && poly_list == nullptr)) return kNotReady;
     if (size % kRecordBytes != 0 || size / kRecordBytes > static_cast<std::size_t>(kItemCapacity)) return kBadRecords;
     const int count = static_cast<int>(size / kRecordBytes);
     // Check everything first, so a bad record leaves the shown frame alone.
@@ -339,6 +522,8 @@ int prepare(const uint8_t *records, std::size_t size, uint16_t background) {
     }
     frame->item_count = static_cast<uint16_t>(shown);
     frame->background = background;
+    poly_count = polygons;
+    z_enabled = z_buffer;
     std::memcpy(frame->overlays, frame->queued, sizeof(Overlay) * frame->queued_count);
     frame->overlay_count = frame->queued_count;
     frame->queued_count = 0;
@@ -351,6 +536,10 @@ void render(const native::TileSurface &surface) {
         return;
     }
     surface.fill(frame->background);
+    if (poly_count > 0 && z_band != nullptr && surface.height <= kBandRows) {
+        std::fill(z_band, z_band + kWidth * kBandRows, static_cast<uint16_t>(0));
+        for (int index = 0; index < poly_count; ++index) draw_poly(surface, poly_list[index]);
+    }
     for (int index = 0; index < frame->item_count; ++index) draw_item(surface, frame->items[index]);
     for (int index = 0; index < frame->overlay_count; ++index) draw_overlay(surface, frame->overlays[index]);
 }

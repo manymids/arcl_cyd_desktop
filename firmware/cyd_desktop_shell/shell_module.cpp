@@ -10,6 +10,7 @@ extern "C" {
 #include "shell_state.h"
 #include "phys_engine.h"
 #include "mesh_engine.h"
+#include "n3d_engine.h"
 #include "screen/keyboard.h"
 
 extern "C" void cyd_desktop_sd_set_boot_error(int error);
@@ -35,6 +36,8 @@ extern "C" void cyd_desktop_scene_overlay_clear(void);
 extern "C" bool cyd_desktop_scene_overlay_add(int kind, int x, int y, int width, int height, int color,
                                               const char *value, int scale, int shadow, int align);
 extern "C" int cyd_desktop_scene_present(const uint8_t *records, size_t size, int background);
+extern "C" int cyd_desktop_scene_present_3d(const uint8_t *items, size_t item_count, const uint8_t *records,
+                                            size_t records_size, int background, bool z_buffer);
 extern "C" bool cyd_desktop_overlay_add(int kind, int x, int y, int width, int height, int color,
                                         const char *value, int scale, int shadow, int align);
 extern "C" void cyd_desktop_draw_triangle(int x0, int y0, int x1, int y1, int x2, int y2, int color, int wire);
@@ -314,6 +317,109 @@ mp_obj_t game_meshes(mp_obj_t camera_obj, mp_obj_t instances_obj) {
     return MP_OBJ_NEW_SMALL_INT(added);
 }
 static MP_DEFINE_CONST_FUN_OBJ_2(game_meshes_obj, game_meshes);
+
+// N3D (API level 12).
+namespace n3d = cyd::desktop::n3d;
+
+int n3d_setting(mp_obj_t value, int low, int high) {
+    const mp_int_t number = mp_obj_get_int(value);
+    if (number < low || number > high) mp_raise_ValueError(MP_ERROR_TEXT("N3D setting out of range"));
+    return static_cast<int>(number);
+}
+
+n3d::Projection n3d_projection_from(mp_obj_t value) {
+    mp_obj_t *items;
+    mp_obj_get_array_fixed_n(value, 4, &items);
+    return n3d::Projection{n3d_setting(items[0], 0, 319), n3d_setting(items[1], 0, 239),
+                           n3d_setting(items[2], 1, 262143), n3d_setting(items[3], 1, INT32_MAX)};
+}
+
+mp_obj_t n3d_reset() {
+    n3d::reset();
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(n3d_reset_obj, n3d_reset);
+
+mp_obj_t n3d_load(mp_obj_t slot_obj, mp_obj_t data_obj) {
+    mp_buffer_info_t data;
+    mp_get_buffer_raise(data_obj, &data, MP_BUFFER_READ);
+    const int result = n3d::load_model(mp_obj_get_int(slot_obj), static_cast<const uint8_t *>(data.buf), data.len);
+    if (result == n3d::kNoMemory) mp_raise_msg(&mp_type_MemoryError, MP_ERROR_TEXT("N3D model allocation failed"));
+    if (result != n3d::kOk) mp_raise_ValueError(MP_ERROR_TEXT("invalid N3D model"));
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(n3d_load_obj, n3d_load);
+
+mp_obj_t n3d_view(mp_obj_t camera_obj, mp_obj_t matrix_obj) {
+    mp_buffer_info_t camera, matrix;
+    mp_get_buffer_raise(camera_obj, &camera, MP_BUFFER_READ);
+    mp_get_buffer_raise(matrix_obj, &matrix, MP_BUFFER_WRITE);
+    if (camera.len != n3d::kCameraBytes || matrix.len != 48)
+        mp_raise_ValueError(MP_ERROR_TEXT("invalid N3D camera or matrix"));
+    int32_t values[12];
+    n3d::set_view(static_cast<const uint8_t *>(camera.buf), values);
+    std::memcpy(matrix.buf, values, sizeof(values));
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(n3d_view_obj, n3d_view);
+
+// n3d_project(points, projection_or_None, out_or_None)
+mp_obj_t n3d_project(mp_obj_t points_obj, mp_obj_t projection_obj, mp_obj_t out_obj) {
+    mp_buffer_info_t points;
+    mp_get_buffer_raise(points_obj, &points, MP_BUFFER_READ);
+    if (points.len % 12 || points.len / 12 > static_cast<size_t>(n3d::kMaxPoints))
+        mp_raise_ValueError(MP_ERROR_TEXT("invalid N3D points"));
+    if (projection_obj != mp_const_none) n3d::set_projection(n3d_projection_from(projection_obj));
+    const int count = static_cast<int>(points.len / 12);
+    uint8_t projected[n3d::kMaxPoints * 6];
+    const int visible = n3d::project_points(static_cast<const uint8_t *>(points.buf), count, projected);
+    if (out_obj != mp_const_none) {
+        mp_buffer_info_t out;
+        mp_get_buffer_raise(out_obj, &out, MP_BUFFER_WRITE);
+        if (out.len < static_cast<size_t>(count) * 6) mp_raise_ValueError(MP_ERROR_TEXT("invalid N3D out buffer"));
+        std::memcpy(out.buf, projected, static_cast<size_t>(count) * 6);
+        return MP_OBJ_NEW_SMALL_INT(visible);
+    }
+    return mp_obj_new_bytes(projected, static_cast<size_t>(count) * 6);
+}
+static MP_DEFINE_CONST_FUN_OBJ_3(n3d_project_obj, n3d_project);
+
+// n3d_frame(items, sprites_or_None, clear, z_buffer, projection, light, fog);
+// None for a setting picks the default.
+mp_obj_t n3d_frame(size_t, const mp_obj_t *args) {
+    mp_buffer_info_t items;
+    mp_get_buffer_raise(args[0], &items, MP_BUFFER_READ);
+    if (items.len % n3d::kItemBytes || items.len / n3d::kItemBytes > static_cast<size_t>(n3d::kMaxItems))
+        mp_raise_ValueError(MP_ERROR_TEXT("invalid N3D frame"));
+    mp_buffer_info_t sprites{};
+    if (args[1] != mp_const_none) mp_get_buffer_raise(args[1], &sprites, MP_BUFFER_READ);
+    const int clear = args[2] == mp_const_none ? n3d::kDefaultClear : n3d_setting(args[2], 0, 65535);
+    const bool z_buffer = mp_obj_is_true(args[3]);
+    n3d::set_projection(args[4] == mp_const_none ? n3d::default_projection() : n3d_projection_from(args[4]));
+    n3d::Light light = n3d::default_light();
+    if (args[5] != mp_const_none) {
+        mp_obj_t *values;
+        mp_obj_get_array_fixed_n(args[5], 4, &values);
+        light = n3d::Light{static_cast<int16_t>(n3d_setting(values[0], -16384, 16384)),
+                           static_cast<int16_t>(n3d_setting(values[1], -16384, 16384)),
+                           static_cast<int16_t>(n3d_setting(values[2], -16384, 16384)),
+                           static_cast<uint8_t>(n3d_setting(values[3], 0, 255))};
+    }
+    n3d::set_light(light);
+    n3d::Fog fog = n3d::default_fog();
+    if (args[6] != mp_const_none) {
+        mp_obj_t *values;
+        mp_obj_get_array_fixed_n(args[6], 3, &values);
+        fog = n3d::Fog{static_cast<uint16_t>(n3d_setting(values[0], 0, 65535)), n3d_setting(values[1], 0, INT32_MAX),
+                       n3d_setting(values[2], 0, INT32_MAX)};
+    }
+    n3d::set_fog(fog);
+    return mp_obj_new_int(cyd_desktop_scene_present_3d(static_cast<const uint8_t *>(items.buf),
+                                                       items.len / n3d::kItemBytes,
+                                                       static_cast<const uint8_t *>(sprites.buf), sprites.len,
+                                                       clear, z_buffer));
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(n3d_frame_obj, 7, 7, n3d_frame);
 
 // Sprite scene (API level 10).
 mp_obj_t scene_begin() { return mp_obj_new_int(cyd_desktop_scene_begin()); }
@@ -719,6 +825,11 @@ const mp_rom_map_elem_t globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_overlay_clear), MP_ROM_PTR(&overlay_clear_obj)},
     {MP_ROM_QSTR(MP_QSTR_overlay_add), MP_ROM_PTR(&overlay_add_obj)},
     {MP_ROM_QSTR(MP_QSTR_game_meshes), MP_ROM_PTR(&game_meshes_obj)},
+    {MP_ROM_QSTR(MP_QSTR_n3d_reset), MP_ROM_PTR(&n3d_reset_obj)},
+    {MP_ROM_QSTR(MP_QSTR_n3d_load), MP_ROM_PTR(&n3d_load_obj)},
+    {MP_ROM_QSTR(MP_QSTR_n3d_view), MP_ROM_PTR(&n3d_view_obj)},
+    {MP_ROM_QSTR(MP_QSTR_n3d_project), MP_ROM_PTR(&n3d_project_obj)},
+    {MP_ROM_QSTR(MP_QSTR_n3d_frame), MP_ROM_PTR(&n3d_frame_obj)},
     {MP_ROM_QSTR(MP_QSTR_scene_begin), MP_ROM_PTR(&scene_begin_obj)},
     {MP_ROM_QSTR(MP_QSTR_scene_end), MP_ROM_PTR(&scene_end_obj)},
     {MP_ROM_QSTR(MP_QSTR_scene_image), MP_ROM_PTR(&scene_image_obj)},

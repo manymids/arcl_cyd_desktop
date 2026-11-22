@@ -160,7 +160,7 @@ which starts at y = 212. Colors are RGB565 integers; use `cyd.rgb()` to create t
 
 | Name | Value |
 | --- | --- |
-| `cyd.API_LEVEL` | API level supplied by the firmware; currently 11 |
+| `cyd.API_LEVEL` | API level supplied by the firmware; currently 12 |
 | `cyd.BLACK` `cyd.NAVY` `cyd.BLUE` `cyd.GREEN` `cyd.CYAN` `cyd.RED` `cyd.MAGENTA` `cyd.ORANGE` `cyd.YELLOW` `cyd.WHITE` | RGB565 colors |
 | `cyd.GAME_PLAYER` `cyd.GAME_ENEMY` `cyd.GAME_BULLET` `cyd.GAME_SHOT` `cyd.GAME_SPARK` | Sprite kinds, 0–4 |
 | `cyd.TILE_FLIP_X` `cyd.TILE_FLIP_Y` `cyd.TILE_BEHIND` | `cyd.tile_sprite()` flags (1, 2, 4) |
@@ -172,6 +172,8 @@ which starts at y = 212. Colors are RGB565 integers; use `cyd.rgb()` to create t
 | `cyd.SPRITE_CAP` `cyd.SPRITE_ITEMS` `cyd.SPRITE_RECORD` | Scene sprite images (32), commands per frame (128), bytes per command (22) |
 | `cyd.BLEND_NORMAL` `cyd.BLEND_ADD` `cyd.BLEND_SUBTRACT` `cyd.BLEND_MULTIPLY` | `cyd.sprite_present()` blend modes (0–3) |
 | `cyd.MESH_VERTICES` `cyd.MESH_FACES` `cyd.MESH_INSTANCES` | Vertices (256) and faces (256) per mesh, instances (32) per `cyd.game_meshes()` |
+| `cyd.N3D_ENABLE` `cyd.N3D_ADD` `cyd.N3D_WIRE` | `cyd.n3d_present()` item flags (1, 4, 8) |
+| `cyd.N3D_MODELS` `cyd.N3D_ITEMS` `cyd.N3D_POLYS` | Model slots (64), items (160) and polygons (320) per frame |
 | `cyd.HTTP_MAX_BYTES` | HTTP response size limit: 32,768 bytes |
 
 ### 3.2 Capacity limits
@@ -576,7 +578,7 @@ Return `sqrt(x*x + y*y)`.
 
 #### `cyd.features()` → `tuple`
 
-The sorted names of the features this firmware has: currently `"image"`, `"keyboard"`, `"mesh"`, `"overlay"`, `"phys"`, `"sprite"`, `"tile"`, `"touch_points"`,
+The sorted names of the features this firmware has: currently `"image"`, `"keyboard"`, `"mesh"`, `"n3d"`, `"overlay"`, `"phys"`, `"sprite"`, `"tile"`, `"touch_points"`,
 `"video"`, and `"wifi"` when the radio mode is Wi-Fi. Apps can check `"phys" in cyd.features()` before
 using a feature.
 
@@ -761,3 +763,71 @@ away from the screen are skipped unless wire frame, and a face crossing the near
 dropped. The triangles share the 256 per frame of `cyd.game_triangle()`; returns how many were queued, and
 the overflow counts as refused triangles in `cyd.game_draw_stats()`. Intersecting faces are ordered by
 their average depth.
+
+## 15. N3D (API level 12 and later)
+
+Z-buffered 3D drawn under the sprite scene of section 13. The calls, formats and the transform, near
+clipping, shading and fog maths match the Android (IS01 / 12HT) port's `n3d_*`. There is no frame buffer:
+polygons are drawn 16 rows at a time with a Z buffer one band high. Numbers are fixed point: positions
+Q16.16 (numbers in -32768..32768 are taken as whole units), angles 65536 per turn (floats are radians).
+The Android port's stars, stereo and Starblade HUD (`stars` / `stereo` / `targets` / `hud` / `label` /
+`rail_map`) are not available.
+
+```python
+cube = cyd.n3d_pack_model(verts, faces)          # (x, y, z) and (i0, i1, i2, i3, colour)
+cyd.n3d_load(0, cube)
+cyd.n3d_camera(eye=(0, -80, -300), at=(0, 0, 0))
+angle = 0
+while cyd.update():
+    angle = (angle + 600) & 0xFFFF
+    cyd.n3d_present([(0, (0, 0, 0), (angle, angle // 2, 0))], clear=cyd.NAVY)
+```
+
+#### `cyd.n3d_pack_model(verts, faces, bound_r=None, flags=1, fix_black=True)` → `bytes`
+
+Build a model from `(x, y, z)` vertices and triangle or quad faces `(i0, i1, i2, colour)`,
+`(i0, i1, i2, i3, colour)` or `((i0, i1, i2[, i3]), colour[, face_flags])`. Face flags: bit 0 unlit, bit 1
+additive, bit 2 wire. `flags` bit 0 makes the model two-sided. `fix_black` turns colour 0 into 0x0841.
+Up to 1024 vertices and 1024 faces.
+
+#### `cyd.n3d_load(slot, model)`
+
+Copy a model into slot 0–63. Raises `ValueError` for a bad model and `MemoryError` when memory runs out.
+Models are cleared when the app ends.
+
+#### `cyd.n3d_camera(eye=(0, 0, -240), at=(0, 0, 0), rot=(0, 0, 0), out=None)` → `bytearray`
+
+Point the camera from `eye` at `at`, then turn it by `rot` (rx, ry, rz). Returns the 48-byte view matrix
+(`"<12i"`, Q16.16).
+
+#### `cyd.n3d_view(camera, matrix)`
+
+The call under `cyd.n3d_camera()`: takes a 30-byte `"<6i3H"` (eye, at, rotation) and writes the view matrix
+into `matrix`.
+
+#### `cyd.n3d_project(points, projection=None, out=None)` → `bytes` or `int`
+
+Project up to 256 `"<3i"` (Q16.16) world points through the camera to `"<hhH"` (sx, sy, depth); depth 0 is
+in front of the near plane. With `out` (6 bytes a point) the records go there and the visible count is
+returned; otherwise the packed records are returned. A `projection` given here is kept for later.
+
+#### `cyd.n3d_present(items, sprites=None, *, clear=None, viewport_width=None, z_buffer=True, projection=None, light=None, fog=None)` → `int`
+
+Draw one frame: background, the 3D `items`, then `sprites` (`cyd.sprite_present()` commands), then the
+overlay. `items` holds up to 160 28-byte `"<6H3iHBB"` records (model, flags, rx, ry, rz, scale Q8.8,
+x, y, z, colour override or 0xFFFF, alpha, 0), or a list of `(model, (x, y, z), (rx, ry, rz), flags,
+scale, colour, alpha)`. Flags combine `cyd.N3D_ENABLE` (draw), `cyd.N3D_ADD` (additive) and
+`cyd.N3D_WIRE` (wire frame). Translucent and additive faces do not write depth.
+
+| Argument | Value (`None` picks the per-frame default) |
+| --- | --- |
+| `clear` | Background colour; default 0x0001 |
+| `z_buffer` | `False` skips depth tests: later polygons cover earlier ones |
+| `projection` | `(centre x, centre y, focal Q8.8, near Q16.16)`; default (160, 127, 52080, 4.0) |
+| `light` | `(x, y, z, ambient)`: camera-space direction in Q1.14 and 0–255; default (-5000, -12000, -9000, 120) |
+| `fog` | `(colour, start, end)` in Q16.16; end ≤ start turns it off; default (0x0001, 600, 2400) |
+
+Returns the number of polygons drawn (up to 320), or -1 once the scene view has been closed.
+`viewport_width` may only be omitted or 320. The first `cyd.n3d_present()` allocates about 32 KB for the
+polygon list and the one-band Z buffer, freed when the app ends. Eight cubes (22 polygons) with a sprite and
+the overlay on top run at about 18 fps on the board.

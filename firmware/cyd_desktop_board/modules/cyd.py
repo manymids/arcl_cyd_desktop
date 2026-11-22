@@ -20,6 +20,8 @@ from _cyd_shell import (app_button, app_clear, app_event, app_log, app_primitive
                          scene_overlay_clear as _scene_overlay_clear,
                          scene_overlay_add as _scene_overlay_add, scene_present as _scene_present,
                          buffer_copy as _buffer_copy, game_meshes as _game_meshes,
+                         n3d_reset as _n3d_reset, n3d_load as _n3d_load, n3d_view as _n3d_view,
+                         n3d_project as _n3d_project, n3d_frame as _n3d_frame,
                           game_touch as _game_touch, runtime_keepalive,
                           runtime_ping as _runtime_ping,
                           video_begin as _video_begin, video_present as _video_present,
@@ -678,8 +680,10 @@ def _compat_reset():
     _keys_previous = ()
     _key_edges = {}
     _last_error = None
-    # The physics world is native and outlives the app; start each app empty.
+    # The physics world and the 3D models are native and outlive the app;
+    # start each app empty.
     _phys_reset(3, 0.0, -520.0, 0.0)
+    _n3d_reset()
 
 
 def _report(ok, reason):
@@ -785,6 +789,7 @@ def game_draw_stats():
 _FEATURE_FUNCS = (
     ("keyboard", "keyboard_connected"),
     ("mesh", "game_meshes"),
+    ("n3d", "n3d_present"),
     ("image", "load_image"),
     ("overlay", "overlay_text"),
     ("phys", "phys_step"),
@@ -1144,3 +1149,172 @@ def game_meshes(camera, instances):
     if count:
         _mark_dirty()
     return count
+
+
+# ---- N3D: Z-buffered 3D in the scene view (API level 12) --------------------
+# The IS01 / 12HT port's n3d_* calls: packed models, a look-at camera, flat
+# lighting and fog, drawn with a Z buffer under the sprite scene's sprites and
+# overlay. Fixed point as on Android: positions Q16.16 (plain numbers in
+# -32768..32768 are taken as whole units), angles 0..65535 per turn (floats
+# are radians). The stars, stereo and Starblade HUD options are not
+# available on the CYD.
+
+N3D_ENABLE = 0x01
+N3D_ADD = 0x04
+N3D_WIRE = 0x08
+N3D_MODELS = 64
+N3D_ITEMS = 160
+N3D_POLYS = 320
+
+
+def _q16(value):
+    return int(value * 65536) if isinstance(value, float) or -32768 <= value <= 32768 else int(value)
+
+
+def _angle(value):
+    return int(value * 10430.37835) & 0xFFFF if isinstance(value, float) else int(value) & 0xFFFF
+
+
+def n3d_load(slot, model):
+    """Copy a packed N3D model (see n3d_pack_model) into slot 0..N3D_MODELS-1."""
+    return _n3d_load(int(slot), model)
+
+
+def n3d_view(camera, matrix):
+    """Set the camera from a 30-byte "<6i3H" record; write the 48-byte view matrix into matrix."""
+    return _n3d_view(camera, matrix)
+
+
+def n3d_camera(eye=(0, 0, -240), at=(0, 0, 0), rot=(0, 0, 0), out=None):
+    """Set the camera from eye and target points and extra (rx, ry, rz) rotations.
+
+    Returns the 48-byte "<12i" Q16.16 view matrix (written into out if given).
+    """
+    import struct
+    camera = struct.pack("<6i3H", _q16(eye[0]), _q16(eye[1]), _q16(eye[2]),
+                         _q16(at[0]), _q16(at[1]), _q16(at[2]),
+                         _angle(rot[0]), _angle(rot[1]), _angle(rot[2]))
+    if out is None:
+        out = bytearray(48)
+    _n3d_view(camera, out)
+    return out
+
+
+def n3d_project(points, projection=None, out=None):
+    """Project up to 256 "<3i" Q16.16 world points through the camera to "<hhH" (sx, sy, depth).
+
+    depth is 0 for a point behind the near plane. With out (6 bytes a point)
+    the records are written there and the visible count returned; otherwise
+    the packed records are returned. projection, if given, is kept for later.
+    """
+    return _n3d_project(points, projection, out)
+
+
+def _n3d_pack_items(items):
+    import struct
+    buffer = bytearray(28 * len(items))
+    position = 0
+    for item in items:
+        xyz = item[1]
+        rotation = item[2] if len(item) > 2 else (0, 0, 0)
+        flags = int(item[3]) if len(item) > 3 else N3D_ENABLE
+        scale = int(item[4]) if len(item) > 4 else 256
+        color = int(item[5]) & 0xFFFF if len(item) > 5 and item[5] is not None else 0xFFFF
+        alpha = int(item[6]) & 0xFF if len(item) > 6 else 255
+        struct.pack_into("<6H3iHBB", buffer, position, int(item[0]), flags,
+                         _angle(rotation[0]), _angle(rotation[1]), _angle(rotation[2]), scale,
+                         _q16(xyz[0]), _q16(xyz[1]), _q16(xyz[2]), color, alpha, 0)
+        position += 28
+    return buffer
+
+
+def n3d_present(items, sprites=None, *, clear=None, viewport_width=None, z_buffer=True,
+                projection=None, light=None, fog=None, stars=False, stereo=None,
+                targets=b"", hud=None, label="", rail_map=b""):
+    """Draw a full-screen 3D frame: the items, then the sprite commands, then the overlay.
+
+    items: packed 28-byte "<6H3iHBB" records (model, flags, rx, ry, rz,
+    scale Q8.8, x, y, z Q16.16, colour override or 0xFFFF, alpha, 0) or a list
+    of (model, (x, y, z), (rx, ry, rz), flags, scale, color, alpha) tuples, up
+    to N3D_ITEMS. sprites: sprite_present() records drawn over the 3D.
+    clear, projection (cx, cy, focal Q8.8, near Q16.16), light (x, y, z Q1.14,
+    ambient) and fog (colour, start, end Q16.16) default per frame when None.
+    Returns the number of polygons drawn (at most N3D_POLYS), or -1 once the
+    scene view has been closed.
+    """
+    if stars or stereo or targets or hud is not None or label or rail_map:
+        raise ValueError("stars, stereo and the HUD are not available on the CYD")
+    if viewport_width not in (None, 320):
+        raise ValueError("the CYD viewport is 320 wide")
+    if isinstance(items, (list, tuple)):
+        items = _n3d_pack_items(items)
+    _scene_enter()
+    result = _n3d_frame(items, sprites, clear, bool(z_buffer), projection, light, fog)
+    if result == -2:
+        raise ValueError("invalid sprite command")
+    if result == -4:
+        return -1
+    if result == -1:
+        raise MemoryError("not enough memory for the 3D buffers")
+    if result < 0:
+        raise OSError(_SCENE_ERRORS.get(result, str(result)))
+    return result
+
+
+def n3d_pack_model(verts, faces, bound_r=None, flags=1, fix_black=True):
+    """Pack vertices and triangle or quad faces into an N3D model for n3d_load().
+
+    verts: (x, y, z) integers. faces: (i0, i1, i2, color), (i0, i1, i2, i3,
+    color) or ((i0, i1, i2[, i3]), color[, face_flags]); face_flags bit 0 is
+    unlit, bit 1 additive, bit 2 wire. flags bit 0 makes the model two-sided.
+    fix_black turns colour 0 into 0x0841. Normals are computed.
+    """
+    import math
+    import struct
+    count_v, count_f = len(verts), len(faces)
+    if not 1 <= count_v <= 1024 or not 1 <= count_f <= 1024:
+        raise ValueError("N3D models have 1..1024 vertices and faces")
+    if bound_r is None:
+        largest = 1
+        for x, y, z in verts:
+            largest = max(largest, x * x + y * y + z * z)
+        bound_r = int(math.ceil(math.sqrt(largest)))
+    buffer = bytearray(8 + count_v * 6 + count_f * 18)
+    struct.pack_into("<HHhH", buffer, 0, count_v, count_f, int(bound_r), int(flags))
+    position = 8
+    for x, y, z in verts:
+        struct.pack_into("<hhh", buffer, position, int(x), int(y), int(z))
+        position += 6
+    for face in faces:
+        face_flags = 0
+        if isinstance(face[0], (tuple, list)):
+            corners, color = face[0], face[1]
+            if len(face) > 2:
+                face_flags = face[2]
+        elif len(face) == 4:
+            corners, color = face[:3], face[3]
+        elif len(face) == 5:
+            corners, color = face[:4], face[4]
+        else:
+            raise ValueError("invalid N3D face")
+        if len(corners) not in (3, 4):
+            raise ValueError("N3D faces have 3 or 4 corners")
+        if fix_black and color == 0:
+            color = 0x0841
+        x0, y0, z0 = verts[corners[0]]
+        x1, y1, z1 = verts[corners[1]]
+        x2, y2, z2 = verts[corners[2]]
+        ax, ay, az = x1 - x0, y1 - y0, z1 - z0
+        bx, by, bz = x2 - x0, y2 - y0, z2 - z0
+        cx, cy, cz = ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx
+        length = math.sqrt(cx * cx + cy * cy + cz * cz)
+        if length > 1e-6:
+            k = 16384.0 / length
+            nx, ny, nz = [max(-16384, min(16384, int(round(c * k)))) for c in (cx, cy, cz)]
+        else:
+            nx, ny, nz = 0, 16384, 0
+        fourth = corners[3] if len(corners) == 4 else 0
+        struct.pack_into("<BBHhhhHHHH", buffer, position, len(corners), face_flags, color & 0xFFFF,
+                         nx, ny, nz, corners[0], corners[1], corners[2], fourth)
+        position += 18
+    return bytes(buffer)

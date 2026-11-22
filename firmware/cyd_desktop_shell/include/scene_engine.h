@@ -32,6 +32,26 @@ constexpr int kMaxImageHeight = 240;
 
 enum Blend : uint8_t { kNormal = 0, kAdd = 1, kSubtract = 2, kMultiply = 3 };
 
+// Screen-space convex polygons from the N3D geometry (n3d_engine.cpp), drawn
+// under the sprites with a Z buffer one band high. Depth keys: larger is nearer.
+constexpr int kPolyVertices = 6;
+constexpr int kPolyCapacity = 320;
+enum PolyFlags : uint8_t {
+    kPolyAdd = 0x02,
+    kPolyWire = 0x04,
+    kPolyNoZTest = 0x10,
+    kPolyNoZWrite = 0x20,
+};
+struct Poly {
+    int32_t x[kPolyVertices];
+    int32_t y[kPolyVertices];
+    uint16_t z[kPolyVertices];
+    uint16_t color;  // RGB565
+    uint8_t count;   // 3..kPolyVertices
+    uint8_t flags;   // PolyFlags
+    uint8_t alpha;   // 1..255
+};
+
 enum Result : int {
     kOk = 0,
     kNoMemory = -1,
@@ -41,6 +61,10 @@ enum Result : int {
 
 // Allocates the frame description. True when ready (also when already ready).
 bool begin();
+// Also allocates the polygon list and the band Z buffer. Needs begin().
+bool begin_3d();
+// The polygon list n3d fills before prepare(); null before begin_3d().
+Poly *polys();
 // Frees it and forgets every image. Safe to call when there is none.
 void end();
 bool ready();
@@ -61,7 +85,10 @@ bool overlay_add(int kind, int x, int y, int width, int height, uint16_t color,
 // scale_x, scale_y, angle, centre_x, centre_y, depth, alpha, blend, flags) on
 // a background colour, and the queued overlay. Returns the record count, or
 // kBadRecords / kNotReady with the shown frame unchanged.
-int prepare(const uint8_t *records, std::size_t size, uint16_t background);
+int prepare(const uint8_t *records, std::size_t size, uint16_t background,
+            int poly_count = 0, bool z_buffer = true);
+// Whether prepare() would accept these records.
+bool valid_records(const uint8_t *records, std::size_t size);
 
 // Renders one band of the shown frame.
 void render(const native::TileSurface &surface);

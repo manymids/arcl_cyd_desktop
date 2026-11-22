@@ -154,7 +154,7 @@ cyd.run()           # Home / Start / 長押しで抜ける
 
 | 名前 | 値 |
 |---|---|
-| `cyd.API_LEVEL` | ファームウェアが提供する API レベル（現在 11） |
+| `cyd.API_LEVEL` | ファームウェアが提供する API レベル（現在 12） |
 | `cyd.BLACK` `cyd.NAVY` `cyd.BLUE` `cyd.GREEN` `cyd.CYAN` `cyd.RED` `cyd.MAGENTA` `cyd.ORANGE` `cyd.YELLOW` `cyd.WHITE` | RGB565 の色 |
 | `cyd.GAME_PLAYER` `cyd.GAME_ENEMY` `cyd.GAME_BULLET` `cyd.GAME_SHOT` `cyd.GAME_SPARK` | スプライトの種類（0〜4） |
 | `cyd.TILE_FLIP_X` `cyd.TILE_FLIP_Y` `cyd.TILE_BEHIND` | `cyd.tile_sprite()` のフラグ（1、2、4） |
@@ -166,6 +166,8 @@ cyd.run()           # Home / Start / 長押しで抜ける
 | `cyd.SPRITE_CAP` `cyd.SPRITE_ITEMS` `cyd.SPRITE_RECORD` | シーンのスプライト画像の数（32）、1 フレームの命令の数（128）、命令 1 件のバイト数（22） |
 | `cyd.BLEND_NORMAL` `cyd.BLEND_ADD` `cyd.BLEND_SUBTRACT` `cyd.BLEND_MULTIPLY` | `cyd.sprite_present()` の合成（0〜3） |
 | `cyd.MESH_VERTICES` `cyd.MESH_FACES` `cyd.MESH_INSTANCES` | メッシュ 1 つの頂点（256）と面（256）、`cyd.game_meshes()` 1 回のインスタンス（32）の上限 |
+| `cyd.N3D_ENABLE` `cyd.N3D_ADD` `cyd.N3D_WIRE` | `cyd.n3d_present()` の項目のフラグ（1、4、8） |
+| `cyd.N3D_MODELS` `cyd.N3D_ITEMS` `cyd.N3D_POLYS` | モデルの枠（64）、1 フレームの項目（160）と多角形（320）の上限 |
 | `cyd.HTTP_MAX_BYTES` | `cyd.http_get()` が受け取る本文の上限（32,768） |
 
 ### 3.2 上限
@@ -507,7 +509,7 @@ Android 版（IS01 / 12HT）の `cyd` と同じ名前・引数で使える補助
 `sqrt(x*x + y*y)` を返します。
 
 #### `cyd.features()` → `tuple`
-このファームウェアが持つ機能の名前を並べ替えて返します。いまは `"image"`、`"keyboard"`、`"mesh"`、`"overlay"`、`"phys"`、`"sprite"`、`"tile"`、`"touch_points"`、`"video"`、
+このファームウェアが持つ機能の名前を並べ替えて返します。いまは `"image"`、`"keyboard"`、`"mesh"`、`"n3d"`、`"overlay"`、`"phys"`、`"sprite"`、`"tile"`、`"touch_points"`、`"video"`、
 無線モードが Wi-Fi のときは `"wifi"`。アプリは `"phys" in cyd.features()` のように確かめてから使えます。
 
 #### `cyd.last_error()` → `str` または `None`
@@ -665,3 +667,57 @@ while cyd.update():
 (メッシュ, x, y, z, yaw, pitch, roll, 倍率) を 32 個まで。角度はラジアン。画面に裏を向けた面は（ワイヤーフレームでなければ）描かず、
 近クリップ面（カメラ座標の z = 14）にかかる面は面ごと除きます。三角形は `cyd.game_triangle()` と同じ 1 フレーム 256 個の枠を使い、
 置けた数を返します。あふれた分は `cyd.game_draw_stats()` の断られた三角形に数えます。交差する面の前後は、面の平均の奥行きで決まります。
+
+## 15. N3D（API レベル 12 以降）
+
+Z バッファ付きの 3D を、13 章のスプライトシーンの下に描きます。Android 版（IS01 / 12HT）の `n3d_*` と同じ呼び方・形式で、
+変換・ニアクリップ・陰影・フォグの計算も同じです。フレームバッファは持たず、多角形を 16 行ずつ、1 帯分の Z バッファで描きます。
+数値は固定小数点です: 位置は Q16.16（-32768〜32768 の数はそのまま単位として扱う）、角度は 65536 で 1 周（小数はラジアン）。
+Android 版の星空・立体視・Starblade 用 HUD（`stars` / `stereo` / `targets` / `hud` / `label` / `rail_map`）はありません。
+
+```python
+cube = cyd.n3d_pack_model(verts, faces)          # (x, y, z) と (i0, i1, i2, i3, 色)
+cyd.n3d_load(0, cube)
+cyd.n3d_camera(eye=(0, -80, -300), at=(0, 0, 0))
+angle = 0
+while cyd.update():
+    angle = (angle + 600) & 0xFFFF
+    cyd.n3d_present([(0, (0, 0, 0), (angle, angle // 2, 0))], clear=cyd.NAVY)
+```
+
+#### `cyd.n3d_pack_model(verts, faces, bound_r=None, flags=1, fix_black=True)` → `bytes`
+頂点 `(x, y, z)` と、三角形か四角形の面 `(i0, i1, i2, 色)`・`(i0, i1, i2, i3, 色)`・`((i0, i1, i2[, i3]), 色[, 面フラグ])` から
+モデルを作ります。面フラグは bit 0 が陰影なし、bit 1 が加算、bit 2 がワイヤーフレーム。`flags` の bit 0 で両面。
+`fix_black` は色 0 を 0x0841 にします。頂点・面とも 1024 まで。
+
+#### `cyd.n3d_load(slot, model)`
+モデルを枠 0〜63 に写します。形式が正しくないと `ValueError`、メモリが足りないと `MemoryError`。アプリの終了で消えます。
+
+#### `cyd.n3d_camera(eye=(0, 0, -240), at=(0, 0, 0), rot=(0, 0, 0), out=None)` → `bytearray`
+カメラを `eye` から `at` へ向け、さらに `rot`（rx, ry, rz）だけ回します。48 バイトのビュー行列（`"<12i"`、Q16.16）を返します。
+
+#### `cyd.n3d_view(camera, matrix)`
+`cyd.n3d_camera()` の下にある呼び出しです。30 バイトの `"<6i3H"`（eye、at、回転）を受け取り、ビュー行列を `matrix` に書きます。
+
+#### `cyd.n3d_project(points, projection=None, out=None)` → `bytes` または `int`
+`"<3i"`（Q16.16）のワールド座標を 256 点まで、カメラから画面へ `"<hhH"`（sx, sy, 深さ）に投影します。深さ 0 はニア面より手前。
+`out`（1 点 6 バイト）を渡すとそこへ書いて見えた数を返し、渡さないと結果のバイト列を返します。
+`projection` を渡すと、以後の投影にも使われます。
+
+#### `cyd.n3d_present(items, sprites=None, *, clear=None, viewport_width=None, z_buffer=True, projection=None, light=None, fog=None)` → `int`
+1 フレームを描きます。順に、背景・`items` の 3D・`sprites`（`cyd.sprite_present()` と同じ命令）・オーバーレイ。
+`items` は 28 バイトの `"<6H3iHBB"`（モデル、フラグ、rx、ry、rz、倍率 Q8.8、x、y、z、色の上書きか 0xFFFF、不透明度、0）を
+160 個まで、または `(モデル, (x, y, z), (rx, ry, rz), フラグ, 倍率, 色, 不透明度)` のリスト。フラグは `cyd.N3D_ENABLE`（描く）・
+`cyd.N3D_ADD`（加算）・`cyd.N3D_WIRE`（ワイヤーフレーム）の和です。半透明と加算の面は深さを書きません。
+
+| 引数 | 指定（`None` でフレームごとの既定値） |
+|---|---|
+| `clear` | 背景色。既定 0x0001 |
+| `z_buffer` | `False` で深さを比べず、後に描いたものが上 |
+| `projection` | `(中心 x, 中心 y, 焦点距離 Q8.8, ニア距離 Q16.16)`。既定 (160, 127, 52080, 4.0) |
+| `light` | `(x, y, z, 環境光)`。カメラ空間の向き Q1.14 と 0〜255。既定 (-5000, -12000, -9000, 120) |
+| `fog` | `(色, 開始, 終了)`。距離は Q16.16、終了 ≦ 開始で無効。既定 (0x0001, 600, 2400) |
+
+描いた多角形の数（320 まで）を返します。シーンの画面が閉じられた後は -1。`viewport_width` は省略か 320 だけです。
+最初の `cyd.n3d_present()` で、多角形の一覧と 1 帯分の Z バッファに約 32 KB を確保します（アプリの終了で解放）。
+立方体 8 個（多角形 22 枚）にスプライトとオーバーレイを重ねて約 18 fps です（実機で測定）。
