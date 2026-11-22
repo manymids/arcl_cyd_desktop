@@ -22,6 +22,11 @@ extern "C" void cyd_desktop_game_frame(uint32_t frame_number, uint32_t score, in
 extern "C" bool cyd_desktop_game_sprite(int kind, int x, int y, int color, int size);
 extern "C" bool cyd_desktop_game_triangle(int x0, int y0, int x1, int y1, int x2, int y2, int color, int flags);
 extern "C" void cyd_desktop_game_draw_stats(int out[4]);
+extern "C" bool cyd_desktop_game_image_set(int slot, const uint16_t *pixels, int width, int height);
+extern "C" bool cyd_desktop_game_bitmap(int slot, int x, int y, int scale, int flags);
+extern "C" void cyd_desktop_overlay_clear(void);
+extern "C" bool cyd_desktop_overlay_add(int kind, int x, int y, int width, int height, int color,
+                                        const char *value, int scale, int shadow, int align);
 extern "C" void cyd_desktop_draw_triangle(int x0, int y0, int x1, int y1, int x2, int y2, int color, int wire);
 extern "C" void cyd_desktop_game_touch(bool *pressed, int *x, int *y);
 extern "C" bool cyd_desktop_video_begin(void);
@@ -208,6 +213,46 @@ mp_obj_t game_triangle(size_t n_args, const mp_obj_t *args) {
     return mp_obj_new_bool(cyd_desktop_game_triangle(x0, y0, x1, y1, x2, y2, color, flags));
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(game_triangle_obj, 7, 8, game_triangle);
+
+// Images and overlay (API level 9).
+// game_image_set(slot, pixels_or_None, width, height): the caller keeps pixels alive.
+mp_obj_t game_image_set(size_t, const mp_obj_t *args) {
+    const int slot = mp_obj_get_int(args[0]);
+    if (args[1] == mp_const_none) return mp_obj_new_bool(cyd_desktop_game_image_set(slot, nullptr, 0, 0));
+    const int width = mp_obj_get_int(args[2]);
+    const int height = mp_obj_get_int(args[3]);
+    mp_buffer_info_t buffer;
+    mp_get_buffer_raise(args[1], &buffer, MP_BUFFER_READ);
+    if (width < 1 || height < 1 || buffer.len != static_cast<size_t>(width) * static_cast<size_t>(height) * 2 ||
+        (reinterpret_cast<uintptr_t>(buffer.buf) & 1u) != 0)
+        mp_raise_ValueError(MP_ERROR_TEXT("invalid RGB565 image"));
+    return mp_obj_new_bool(cyd_desktop_game_image_set(slot, static_cast<const uint16_t *>(buffer.buf), width, height));
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(game_image_set_obj, 4, 4, game_image_set);
+
+mp_obj_t game_bitmap(size_t, const mp_obj_t *args) {
+    return mp_obj_new_bool(cyd_desktop_game_bitmap(mp_obj_get_int(args[0]), mp_obj_get_int(args[1]),
+                                                   mp_obj_get_int(args[2]), mp_obj_get_int(args[3]),
+                                                   mp_obj_get_int(args[4])));
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(game_bitmap_obj, 5, 5, game_bitmap);
+
+mp_obj_t overlay_clear() {
+    cyd_desktop_overlay_clear();
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(overlay_clear_obj, overlay_clear);
+
+// overlay_add(kind, x, y, width, height, color, text, scale, shadow, align)
+mp_obj_t overlay_add(size_t, const mp_obj_t *args) {
+    const char *value = args[6] == mp_const_none ? nullptr : mp_obj_str_get_str(args[6]);
+    return mp_obj_new_bool(cyd_desktop_overlay_add(mp_obj_get_int(args[0]), mp_obj_get_int(args[1]),
+                                                   mp_obj_get_int(args[2]), mp_obj_get_int(args[3]),
+                                                   mp_obj_get_int(args[4]), mp_obj_get_int(args[5]), value,
+                                                   mp_obj_get_int(args[7]), mp_obj_get_int(args[8]),
+                                                   mp_obj_get_int(args[9])));
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(overlay_add_obj, 10, 10, overlay_add);
 
 // Physics (API level 8): the engine integrates and collides; Python places
 // bodies and draws what phys_state() reports.
@@ -548,6 +593,10 @@ const mp_rom_map_elem_t globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_game_sprite), MP_ROM_PTR(&game_sprite_obj)},
     {MP_ROM_QSTR(MP_QSTR_game_triangle), MP_ROM_PTR(&game_triangle_obj)},
     {MP_ROM_QSTR(MP_QSTR_game_draw_stats), MP_ROM_PTR(&game_draw_stats_obj)},
+    {MP_ROM_QSTR(MP_QSTR_game_image_set), MP_ROM_PTR(&game_image_set_obj)},
+    {MP_ROM_QSTR(MP_QSTR_game_bitmap), MP_ROM_PTR(&game_bitmap_obj)},
+    {MP_ROM_QSTR(MP_QSTR_overlay_clear), MP_ROM_PTR(&overlay_clear_obj)},
+    {MP_ROM_QSTR(MP_QSTR_overlay_add), MP_ROM_PTR(&overlay_add_obj)},
     {MP_ROM_QSTR(MP_QSTR_phys_reset), MP_ROM_PTR(&phys_reset_obj)},
     {MP_ROM_QSTR(MP_QSTR_phys_body), MP_ROM_PTR(&phys_body_obj)},
     {MP_ROM_QSTR(MP_QSTR_phys_velocity), MP_ROM_PTR(&phys_velocity_obj)},

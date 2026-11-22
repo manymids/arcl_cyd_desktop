@@ -160,13 +160,15 @@ which starts at y = 212. Colors are RGB565 integers; use `cyd.rgb()` to create t
 
 | Name | Value |
 | --- | --- |
-| `cyd.API_LEVEL` | API level supplied by the firmware; currently 8 |
+| `cyd.API_LEVEL` | API level supplied by the firmware; currently 9 |
 | `cyd.BLACK` `cyd.NAVY` `cyd.BLUE` `cyd.GREEN` `cyd.CYAN` `cyd.RED` `cyd.MAGENTA` `cyd.ORANGE` `cyd.YELLOW` `cyd.WHITE` | RGB565 colors |
 | `cyd.GAME_PLAYER` `cyd.GAME_ENEMY` `cyd.GAME_BULLET` `cyd.GAME_SHOT` `cyd.GAME_SPARK` | Sprite kinds, 0–4 |
 | `cyd.TILE_FLIP_X` `cyd.TILE_FLIP_Y` `cyd.TILE_BEHIND` | `cyd.tile_sprite()` flags (1, 2, 4) |
 | `cyd.KEY_DOWN` `cyd.KEY_PRESSED` `cyd.KEY_RELEASED` | Bits returned by `cyd.key_state()` (1, 2, 4) |
 | `cyd.PHYS_SPHERE` `cyd.PHYS_BOX` `cyd.PHYS_PLANE` | `cyd.phys_body()` shapes (1, 2, 3) |
 | `cyd.PHYS_CAP` `cyd.PHYS_STRIDE` | Body limit (48) and bytes per `cyd.phys_state()` record (40) |
+| `cyd.ALIGN_LEFT` `cyd.ALIGN_CENTER` `cyd.ALIGN_RIGHT` | `cyd.overlay_text()` alignment (0, 1, 2) |
+| `cyd.IMAGE_CAP` `cyd.OVERLAY_CAP` | Image limit (16) and overlay items per frame (24) |
 | `cyd.HTTP_MAX_BYTES` | HTTP response size limit: 32,768 bytes |
 
 ### 3.2 Capacity limits
@@ -181,6 +183,8 @@ raising an exception. Check their return values.
 | Shapes | 48 | `kAppPrimitiveCapacity` |
 | Game sprites | 128 | `kGameSpriteCapacity` |
 | Game triangles | 256 | `kGameTriangleCapacity` |
+| Game images | 16 | `kGameImageCapacity` |
+| Overlay items | 24 | `kGameOverlayCapacity` |
 | Console lines | 22 | `kConsoleMaxLines` |
 
 ### 3.3 Basic UI
@@ -569,7 +573,7 @@ Return `sqrt(x*x + y*y)`.
 
 #### `cyd.features()` → `tuple`
 
-The sorted names of the features this firmware has: currently `"keyboard"`, `"phys"`, `"tile"`, `"touch_points"`,
+The sorted names of the features this firmware has: currently `"image"`, `"keyboard"`, `"overlay"`, `"phys"`, `"tile"`, `"touch_points"`,
 `"video"`, and `"wifi"` when the radio mode is Wi-Fi. Apps can check `"phys" in cyd.features()` before
 using a feature.
 
@@ -622,3 +626,48 @@ Write the 48 slots, in order, into `buf` (a `bytearray` of at least `cyd.PHYS_CA
 bytes). Each record is `struct` `"<9fBBBB"`: x, y, z, vx, vy, vz, hx, hy, hz, shape, flags (bit 0 set
 for a dynamic body), id, active. Returns the number of active bodies. For a plane, x, y, z is its point
 nearest the origin.
+
+## 12. Images and overlay (API level 9 and later)
+
+Game rendering (`cyd.game_begin()`) gains the app's own images and text and rectangles drawn on top. The
+calls match the Android (IS01 / 12HT) port.
+
+```python
+cyd.game_begin()
+ship = cyd.load_image("ship.rgb", 32, 24)       # RGB565 in the app's folder
+while cyd.update():
+    cyd.game_frame(frame)
+    cyd.game_bitmap(ship, 160, 120, scale=150)
+    cyd.overlay_rect(0, 190, 320, 20, cyd.BLACK)
+    cyd.overlay_text(160, 196, "READY", cyd.YELLOW, 2, align=cyd.ALIGN_CENTER)
+```
+
+#### `cyd.load_image(name, width, height)` → `int`
+
+Load a headerless little-endian RGB565 image from the app's folder (`/sd/apps/<id>/`) and return the id
+(0–15) to pass to `cyd.game_bitmap()`. Colour 0 is transparent. `name` is a bare file name (letters,
+digits and `_.-`, up to 24 characters); images are at most 320×240. The pixels live on the app's heap
+until the app ends (8 KB for 64×64). Raises `ValueError` or `OSError` for a bad size or a missing or
+wrong-length file, and `MemoryError` when the heap or the 16 slots run out; `cyd.last_error()` then
+holds the reason.
+
+#### `cyd.game_bitmap(id, x, y, scale=100, flags=0)` → `bool`
+
+Queue a loaded image centred on `(x, y)` at `scale` percent; `flags` bit 0 mirrors it left to right. It
+shares the 128 slots of `cyd.game_sprite()`. `False` when the id is not loaded or the frame is full.
+Twenty scaled 32×24 images plus 24 overlay items per frame run at about 14 fps on the board.
+
+#### `cyd.overlay_text(x, y, value, color=WHITE, scale=1, shadow=0x0821, align=ALIGN_LEFT)` → `bool`
+
+Draw 5×7 text (up to 40 characters) over the game frame. `scale` is 1–6; `shadow` is the colour of a
+copy drawn one pixel (times `scale`) down and right first, 0 for none; `align` makes `x` the left
+edge, the centre or the right edge.
+
+#### `cyd.overlay_rect(x, y, width, height, color=WHITE, fill=True)` → `bool`
+
+Draw a rectangle over the game frame; `fill=False` draws only its outline.
+
+#### `cyd.overlay_clear()`
+
+Remove this frame's overlay items. Overlay items are drawn above the sprites and the score line and are
+also cleared by `cyd.game_frame()`. Up to 24 per frame, text and rectangles together.

@@ -14,6 +14,8 @@ from _cyd_shell import (app_button, app_clear, app_event, app_log, app_primitive
                          phys_reset as _phys_reset, phys_body as _phys_body,
                          phys_velocity as _phys_velocity, phys_step as _phys_step,
                          phys_state as _phys_state,
+                         game_image_set as _game_image_set, game_bitmap as _game_bitmap,
+                         overlay_clear as _overlay_clear, overlay_add as _overlay_add,
                           game_touch as _game_touch, runtime_keepalive,
                           runtime_ping as _runtime_ping,
                           video_begin as _video_begin, video_present as _video_present,
@@ -22,7 +24,7 @@ from _cyd_shell import (app_button, app_clear, app_event, app_log, app_primitive
                           tile_frame as _tile_frame, tile_sprite as _tile_sprite, tile_text as _tile_text,
                           tile_rect as _tile_rect,
                           tile_present as _tile_present, keys_down as _keys_down)
-from _manifest import API_LEVEL
+from _manifest import API_LEVEL, safe_component as _safe_component
 
 BLACK = 0x0000
 NAVY = 0x000F
@@ -71,6 +73,7 @@ def _tile_release():
     global _tile_buffers
     _tile_end()
     _tile_buffers = None
+    _images_release()
 
 def _set_app_root(app_id):
     global _app_root, _ui_used, _video_used
@@ -772,6 +775,8 @@ def game_draw_stats():
 # (feature name, the function whose presence means the feature works here)
 _FEATURE_FUNCS = (
     ("keyboard", "keyboard_connected"),
+    ("image", "load_image"),
+    ("overlay", "overlay_text"),
     ("phys", "phys_step"),
     ("tile", "tile_begin"),
     ("touch_points", "touch_points"),
@@ -846,3 +851,104 @@ def phys_state(buf):
     flags, id, active. flags bit 0 is set for a dynamic body.
     """
     return _phys_state(buf)
+
+
+# ---- Images and HUD overlay (API level 9) ---------------------------------
+# Same calls as the IS01 / 12HT port. Images are headerless little-endian
+# RGB565 files in the app's own folder; colour 0 is transparent. Overlay items
+# are drawn over the game frame, after the sprites and the score line, and are
+# cleared by game_frame() and overlay_clear().
+
+ALIGN_LEFT = 0
+ALIGN_CENTER = 1
+ALIGN_RIGHT = 2
+IMAGE_CAP = 16
+OVERLAY_CAP = 24
+
+# Pixel buffers the native table points into, by slot; kept alive until release.
+_images = [None] * IMAGE_CAP
+
+
+def _images_release():
+    for slot in range(IMAGE_CAP):
+        if _images[slot] is not None:
+            _game_image_set(slot, None, 0, 0)
+            _images[slot] = None
+
+
+def _app_file(name):
+    name = str(name)
+    if not _safe_component(name) or _app_root is None:
+        raise ValueError("asset must be a file name in this app")
+    return _app_root[:-len("/data")] + "/" + name
+
+
+def load_image(name, width, height):
+    """Load a headerless little-endian RGB565 image from this app's folder.
+
+    Returns a bitmap id (0..IMAGE_CAP-1) for game_bitmap(). The pixels stay on
+    the app's heap until the app ends. Raises ValueError for a bad size,
+    OSError when the file is missing or short, MemoryError when the heap or the
+    IMAGE_CAP slots run out; last_error() then says why.
+    """
+    width, height = int(width), int(height)
+    try:
+        if not 1 <= width <= 320 or not 1 <= height <= 240:
+            raise ValueError("image size out of range")
+        slot = _images.index(None) if None in _images else -1
+        if slot < 0:
+            raise MemoryError("all %d image slots are in use" % IMAGE_CAP)
+        pixels = bytearray(width * height * 2)
+        with open(_app_file(name), "rb") as source:
+            count = source.readinto(pixels)
+            extra = source.read(1)
+        if count != len(pixels) or extra:
+            raise OSError("%s is not %dx%d RGB565" % (name, width, height))
+        _game_image_set(slot, pixels, width, height)
+        _images[slot] = pixels
+    except Exception as error:
+        _report(False, error)
+        raise
+    _report(True, "")
+    return slot
+
+
+def game_bitmap(id, x, y, scale=100, flags=0):
+    """Queue a loaded image centred on (x, y) at scale percent; flags bit 0 mirrors it.
+
+    Shares the 128 sprite slots with game_sprite(). False when the id is not
+    loaded or the frame is full.
+    """
+    result = _game_bitmap(int(id), int(x), int(y), int(scale), int(flags))
+    if result:
+        _mark_dirty()
+    return result
+
+
+def overlay_clear():
+    """Remove this frame's overlay text and rectangles."""
+    _overlay_clear()
+    _mark_dirty()
+
+
+def overlay_text(x, y, value, color=WHITE, scale=1, shadow=0x0821, align=ALIGN_LEFT):
+    """Queue 5x7 text (up to 40 characters) over the game frame.
+
+    scale is 1..6, shadow an RGB565 colour drawn one pixel per scale down and
+    right (0 for none), align ALIGN_LEFT / ALIGN_CENTER / ALIGN_RIGHT about x.
+    False when the frame already has OVERLAY_CAP overlay items.
+    """
+    result = _overlay_add(0, int(x), int(y), 0, 0, int(color) & 0xFFFF, str(value),
+                          int(scale), int(shadow) & 0xFFFF, int(align))
+    if result:
+        _mark_dirty()
+    return result
+
+
+def overlay_rect(x, y, width, height, color=WHITE, fill=True):
+    """Queue a filled (or, with fill=False, outlined) rectangle over the game frame."""
+    result = _overlay_add(1 if fill else 2, int(x), int(y), int(width), int(height),
+                          int(color) & 0xFFFF, None, 1, 0, 0)
+    if result:
+        _mark_dirty()
+    return result

@@ -6,6 +6,8 @@ the board.
 """
 
 import os
+import shutil
+import tempfile
 import struct
 import sys
 import types
@@ -24,6 +26,8 @@ class Shell:
         self.capacity = 3
         self.dropped = 0
         self.radio = "off"
+        self.images = {}
+        self.overlays = []
 
     def game_touch(self):
         return self.touch
@@ -43,6 +47,18 @@ class Shell:
 
     def radio_mode(self):
         return self.radio
+
+    def game_image_set(self, slot, pixels, width, height):
+        if pixels is None:
+            self.images.pop(slot, None)
+        else:
+            assert len(pixels) == width * height * 2
+            self.images[slot] = (bytes(pixels), width, height)
+        return True
+
+    def overlay_add(self, *args):
+        self.overlays.append(args)
+        return True
 
 
 shell = Shell()
@@ -134,6 +150,52 @@ def test_misc():
     assert "wifi" in cyd.features()
     assert cyd._report(False, "no file") is False and cyd.last_error() == "no file"
     assert cyd._report(True, "") is True and cyd.last_error() is None
+
+
+def test_load_image():
+    folder = tempfile.mkdtemp()
+    try:
+        cyd._set_app_root("imgtest")
+        cyd._app_root = folder + "/data"
+        with open(os.path.join(folder, "ship.rgb"), "wb") as target:
+            target.write(struct.pack("<4H", 0x0000, 0xF800, 0x07E0, 0x001F))
+        with open(os.path.join(folder, "short.rgb"), "wb") as target:
+            target.write(bytes(6))
+        assert cyd.load_image("ship.rgb", 2, 2) == 0
+        assert shell.images[0] == (struct.pack("<4H", 0, 0xF800, 0x07E0, 0x001F), 2, 2)
+        assert cyd.last_error() is None
+        assert cyd.load_image("ship.rgb", 2, 2) == 1, "each load takes the next slot"
+        for bad in [("short.rgb", 2, 2), ("ship.rgb", 1, 2), ("../ship.rgb", 2, 2), ("ship.rgb", 0, 2),
+                    ("missing.rgb", 2, 2)]:
+            try:
+                cyd.load_image(*bad)
+            except (ValueError, OSError):
+                assert cyd.last_error(), bad
+            else:
+                raise AssertionError("accepted %r" % (bad,))
+        for slot in range(2, cyd.IMAGE_CAP):
+            cyd.load_image("ship.rgb", 2, 2)
+        try:
+            cyd.load_image("ship.rgb", 2, 2)
+        except MemoryError:
+            pass
+        else:
+            raise AssertionError("more than IMAGE_CAP images")
+        cyd._set_app_root("next")
+        assert shell.images == {}, "images are released at the next app start"
+        assert cyd._images == [None] * cyd.IMAGE_CAP
+    finally:
+        shutil.rmtree(folder)
+
+
+def test_overlay():
+    shell.overlays = []
+    assert cyd.overlay_text(160, 10, "HI", cyd.YELLOW, 2, align=cyd.ALIGN_CENTER)
+    assert cyd.overlay_rect(0, 0, 10, 5, cyd.RED, fill=False)
+    assert shell.overlays[0] == (0, 160, 10, 0, 0, cyd.YELLOW, "HI", 2, 0x0821, 1)
+    assert shell.overlays[1] == (2, 0, 0, 10, 5, cyd.RED, None, 1, 0, 0)
+    names = cyd.features()
+    assert "image" in names and "overlay" in names
 
 
 def main():

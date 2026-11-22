@@ -49,10 +49,32 @@ struct GameSprite {
     int16_t x;
     int16_t y;
     uint16_t color;
-    uint8_t kind;
+    uint16_t scale;  // bitmap sprites: percent
+    uint8_t kind;    // 0..4 shapes; kGameBitmapKind + image slot for bitmaps
     uint8_t size;
+    uint8_t flags;   // bitmap sprites: bit 0 mirrors left-right
 };
 constexpr uint8_t kGameSpriteCapacity = 128;
+constexpr uint8_t kGameBitmapKind = 16;
+// RGB565 images loaded by cyd.load_image(). The pixels live in a bytearray the
+// Python side keeps alive until it clears the slot; this table only points at it.
+struct GameImage {
+    const uint16_t *pixels;
+    uint16_t width;
+    uint16_t height;
+};
+constexpr uint8_t kGameImageCapacity = 16;
+// HUD text and rectangles drawn over the game frame (cyd.overlay_*).
+struct GameOverlay {
+    int16_t x, y, width, height;
+    uint16_t color;
+    uint16_t shadow;
+    uint8_t kind;  // 0 text, 1 filled rectangle, 2 outlined rectangle
+    uint8_t scale;
+    uint8_t align;
+    char text[41];
+};
+constexpr uint8_t kGameOverlayCapacity = 24;
 struct GameTriangle {
     int16_t x0, y0;
     int16_t x1, y1;
@@ -76,6 +98,8 @@ struct GameSurface {
     // Calls refused this frame because the batch was full (game_draw_stats).
     uint16_t dropped_sprites;
     uint16_t dropped_triangles;
+    uint8_t overlay_count;
+    GameOverlay overlays[kGameOverlayCapacity];
     GameSprite sprites[kGameSpriteCapacity];
     GameTriangle triangles[kGameTriangleCapacity];
 };
@@ -96,6 +120,9 @@ AppSurface app_surface{};
 portMUX_TYPE app_surface_lock = portMUX_INITIALIZER_UNLOCKED;
 GameSurface game_surface{};
 GameSurface rendering_game_surface{};
+// Guarded by game_surface_lock, like game_surface.
+GameImage game_images[kGameImageCapacity]{};
+GameImage rendering_game_images[kGameImageCapacity]{};
 portMUX_TYPE game_surface_lock = portMUX_INITIALIZER_UNLOCKED;
 bool displayed_game = false;
 
@@ -337,6 +364,70 @@ void draw_game_sprite(const GameSprite &sprite) {
     }
 }
 
+void draw_game_bitmap_sprite(const GameSprite &sprite) {
+    const int slot = static_cast<int>(sprite.kind) - kGameBitmapKind;
+    if (slot < 0 || slot >= kGameImageCapacity) return;
+    const GameImage &image = rendering_game_images[slot];
+    if (image.pixels == nullptr || image.width == 0 || image.height == 0) return;
+
+    const int scale = std::max(1, static_cast<int>(sprite.scale));
+    const int dw = std::max(1, (static_cast<int>(image.width) * scale + 50) / 100);
+    const int dh = std::max(1, (static_cast<int>(image.height) * scale + 50) / 100);
+    const int x0 = sprite.x - dw / 2;
+    const int y0 = sprite.y - dh / 2;
+
+    const int band_top = tile_raster_active ? tile_raster_y : 0;
+    const int band_bottom = tile_raster_active ? tile_raster_y + tile_raster_height : kTaskbarY;
+    const int y_start = std::max(std::max(0, y0), band_top);
+    const int y_end = std::min(std::min(kTaskbarY, y0 + dh), band_bottom);
+    const int x_start = std::max(0, x0);
+    const int x_end = std::min(kWidth, x0 + dw);
+    if (y_start >= y_end || x_start >= x_end) return;
+
+    const bool flip_x = (sprite.flags & 1) != 0;
+    const uint32_t step = ((static_cast<uint32_t>(image.width) << 16) + static_cast<uint32_t>(dw / 2)) /
+                          static_cast<uint32_t>(dw);
+    for (int y = y_start; y < y_end; ++y) {
+        const int source_y = ((y - y0) * static_cast<int>(image.height)) / dh;
+        if (source_y < 0 || source_y >= image.height) continue;
+        const uint16_t *source = image.pixels + static_cast<size_t>(source_y) * image.width;
+        uint32_t source_x = static_cast<uint32_t>(x_start - x0) * step;
+        for (int x = x_start; x < x_end; ++x, source_x += step) {
+            uint32_t column = source_x >> 16;
+            if (column >= image.width) column = image.width - 1u;
+            if (flip_x) column = image.width - 1u - column;
+            const uint16_t pixel = source[column];
+            if (pixel == 0) continue;  // colour 0 is transparent
+            if (tile_raster_active)
+                line_buffer[static_cast<size_t>(y - tile_raster_y) * kWidth + x] = swap16(pixel);
+            else
+                fill_rect(x, y, 1, 1, pixel);
+        }
+    }
+}
+
+void draw_game_overlay(const GameOverlay &item) {
+    const int band_top = tile_raster_active ? tile_raster_y : 0;
+    const int band_bottom = tile_raster_active ? tile_raster_y + tile_raster_height : kHeight;
+    if (item.kind == 1 || item.kind == 2) {
+        if (item.y + item.height <= band_top || item.y >= band_bottom) return;
+        if (item.kind == 1)
+            fill_rect(item.x, item.y, item.width, item.height, item.color);
+        else
+            frame(item.x, item.y, item.width, item.height, item.color);
+        return;
+    }
+    const int scale = item.scale;
+    const int height = 7 * scale + (item.shadow != 0 ? scale : 0);
+    if (item.y + height <= band_top || item.y >= band_bottom) return;
+    int x = item.x;
+    const int width = text_width(item.text, scale);
+    if (item.align == 1) x -= width / 2;
+    else if (item.align == 2) x -= width;
+    if (item.shadow != 0) text(item.text, x + scale, item.y + scale, item.shadow, scale);
+    text(item.text, x, item.y, item.color, scale);
+}
+
 void draw_game_surface(const char *title, const GameSurface &game) {
     fill_rect(0, 0, kWidth, 18, 0x0863);
     fill_rect(0, 18, kWidth, 48, game.background_top);
@@ -360,6 +451,10 @@ void draw_game_surface(const char *title, const GameSurface &game) {
     }
     for (uint8_t index = 0; index < game.sprite_count; ++index) {
         const auto &sprite = game.sprites[index];
+        if (sprite.kind >= kGameBitmapKind) {
+            draw_game_bitmap_sprite(sprite);
+            continue;
+        }
         const int radius = static_cast<int>(sprite.size) + 4;
         if (tile_raster_active &&
             (sprite.y + radius < tile_raster_y || sprite.y - radius >= tile_raster_y + tile_raster_height))
@@ -374,11 +469,13 @@ void draw_game_surface(const char *title, const GameSurface &game) {
         fill_circle(278 + life * 8, 9, 3, kGreen);
     for (uint8_t bomb = 0; bomb < game.bombs && bomb < 3; ++bomb)
         frame(278 + bomb * 10, 20, 6, 6, kYellow);
+    for (uint8_t index = 0; index < game.overlay_count; ++index) draw_game_overlay(game.overlays[index]);
 }
 
 void render_game(const char *title, const AppSurface &surface) {
     taskENTER_CRITICAL(&game_surface_lock);
     rendering_game_surface = game_surface;
+    std::memcpy(rendering_game_images, game_images, sizeof(game_images));
     taskEXIT_CRITICAL(&game_surface_lock);
     const bool first_frame = !displayed_game || !displayed_app.valid ||
         std::strcmp(displayed_app.shell_title, title) != 0;
@@ -685,6 +782,7 @@ extern "C" void cyd_desktop_game_frame(uint32_t frame_number, uint32_t score, in
     game_surface.triangle_count = 0;
     game_surface.dropped_sprites = 0;
     game_surface.dropped_triangles = 0;
+    game_surface.overlay_count = 0;
     taskEXIT_CRITICAL(&game_surface_lock);
 }
 
@@ -702,8 +800,76 @@ extern "C" bool cyd_desktop_game_sprite(int kind, int x, int y, int color, int s
     sprite.y = static_cast<int16_t>(std::max(-16, std::min(kTaskbarY + 16, y)));
     sprite.color = static_cast<uint16_t>(color);
     sprite.size = static_cast<uint8_t>(std::max(1, std::min(16, size)));
+    sprite.scale = 0;
+    sprite.flags = 0;
     taskEXIT_CRITICAL(&game_surface_lock);
     return true;
+}
+
+// Point image slot `slot` at `pixels` (RGB565, native byte order, 0 is
+// transparent), or clear it when pixels is null. The caller keeps the memory
+// alive until it clears the slot.
+extern "C" bool cyd_desktop_game_image_set(int slot, const uint16_t *pixels, int width, int height) {
+    if (slot < 0 || slot >= kGameImageCapacity) return false;
+    if (pixels != nullptr && (width < 1 || width > kWidth || height < 1 || height > kHeight)) return false;
+    GameImage image{};
+    if (pixels != nullptr) image = {pixels, static_cast<uint16_t>(width), static_cast<uint16_t>(height)};
+    taskENTER_CRITICAL(&game_surface_lock);
+    game_images[slot] = image;
+    taskEXIT_CRITICAL(&game_surface_lock);
+    return true;
+}
+
+extern "C" bool cyd_desktop_game_bitmap(int slot, int x, int y, int scale, int flags) {
+    if (slot < 0 || slot >= kGameImageCapacity || scale <= 0) return false;
+    taskENTER_CRITICAL(&game_surface_lock);
+    if (!game_surface.active || game_images[slot].pixels == nullptr) {
+        taskEXIT_CRITICAL(&game_surface_lock);
+        return false;
+    }
+    if (game_surface.sprite_count >= kGameSpriteCapacity) {
+        if (game_surface.dropped_sprites < UINT16_MAX) ++game_surface.dropped_sprites;
+        taskEXIT_CRITICAL(&game_surface_lock);
+        return false;
+    }
+    auto &sprite = game_surface.sprites[game_surface.sprite_count++];
+    sprite.kind = static_cast<uint8_t>(kGameBitmapKind + slot);
+    sprite.x = static_cast<int16_t>(std::max(-kWidth, std::min(2 * kWidth, x)));
+    sprite.y = static_cast<int16_t>(std::max(-kHeight, std::min(2 * kHeight, y)));
+    sprite.scale = static_cast<uint16_t>(std::min(1000, scale));
+    sprite.flags = static_cast<uint8_t>(flags & 1);
+    sprite.color = 0;
+    sprite.size = 0;
+    taskEXIT_CRITICAL(&game_surface_lock);
+    return true;
+}
+
+extern "C" void cyd_desktop_overlay_clear(void) {
+    taskENTER_CRITICAL(&game_surface_lock);
+    game_surface.overlay_count = 0;
+    taskEXIT_CRITICAL(&game_surface_lock);
+}
+
+// kind 0 is text (value, scale, shadow, align); 1 and 2 are a filled and an
+// outlined rectangle. False when the frame's overlay list is full.
+extern "C" bool cyd_desktop_overlay_add(int kind, int x, int y, int width, int height, int color,
+                                        const char *value, int scale, int shadow, int align) {
+    GameOverlay item{};
+    item.kind = static_cast<uint8_t>(std::max(0, std::min(2, kind)));
+    item.x = static_cast<int16_t>(std::max(-kWidth, std::min(2 * kWidth, x)));
+    item.y = static_cast<int16_t>(std::max(-kHeight, std::min(2 * kHeight, y)));
+    item.width = static_cast<int16_t>(std::max(0, std::min(kWidth, width)));
+    item.height = static_cast<int16_t>(std::max(0, std::min(kHeight, height)));
+    item.color = static_cast<uint16_t>(color);
+    item.shadow = static_cast<uint16_t>(shadow);
+    item.scale = static_cast<uint8_t>(std::max(1, std::min(6, scale)));
+    item.align = static_cast<uint8_t>(std::max(0, std::min(2, align)));
+    if (value != nullptr) std::snprintf(item.text, sizeof(item.text), "%s", value);
+    taskENTER_CRITICAL(&game_surface_lock);
+    const bool accepted = game_surface.active && game_surface.overlay_count < kGameOverlayCapacity;
+    if (accepted) game_surface.overlays[game_surface.overlay_count++] = item;
+    taskEXIT_CRITICAL(&game_surface_lock);
+    return accepted;
 }
 
 extern "C" bool cyd_desktop_game_triangle(int x0, int y0, int x1, int y1, int x2, int y2,
