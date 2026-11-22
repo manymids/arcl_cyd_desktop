@@ -1,8 +1,8 @@
 // See include/n3d_engine.h. The maths follows native_3d.c (Native3D_MakeTRS,
 // MatLookAt, BuildModelPolys, XformPoints) so a scene projects to the same
 // polygons; what changed is where they go (scene::Poly, rasterized by band)
-// and the memory: models and the vertex scratch are allocated on demand and
-// freed by reset(), with no 4096-vertex static array or 960x540 Z buffer.
+// and the memory: models and the vertex scratch are the caller's buffers,
+// with no 4096-vertex static array or 960x540 Z buffer.
 
 #include "n3d_engine.h"
 
@@ -37,8 +37,8 @@ static_assert(sizeof(Vertex) == 6, "packed vertex");
 static_assert(sizeof(Face) == 18, "packed face");
 
 struct Model {
-    Vertex *vertices;
-    Face *faces;
+    const Vertex *vertices;
+    const Face *faces;
     int vertex_count, face_count;
     uint16_t flags;  // bit 0: two-sided
 };
@@ -206,11 +206,6 @@ int clip_near(const CameraPoint *in, int count, CameraPoint *out) {
     return written;
 }
 
-void free_model(Model &model) {
-    std::free(model.vertices);
-    std::free(model.faces);
-    model = Model{};
-}
 
 }  // namespace
 
@@ -218,9 +213,20 @@ Projection default_projection() { return Projection{160, 127, 217 * 240, 4 * kOn
 Light default_light() { return Light{-5000, -12000, -9000, 120}; }
 Fog default_fog() { return Fog{0x0001, 600 * kOne, 2400 * kOne}; }
 
+std::size_t scratch_bytes(int vertices) { return sizeof(Transformed) * static_cast<std::size_t>(std::max(0, vertices)); }
+
+void set_scratch(void *memory, std::size_t size) {
+    if (memory == nullptr || (reinterpret_cast<uintptr_t>(memory) & 7u) != 0) {
+        scratch = nullptr;
+        scratch_size = 0;
+        return;
+    }
+    scratch = static_cast<Transformed *>(memory);
+    scratch_size = static_cast<int>(size / sizeof(Transformed));
+}
+
 void reset() {
-    for (Model &model : models) free_model(model);
-    std::free(scratch);
+    for (Model &model : models) model = Model{};
     scratch = nullptr;
     scratch_size = 0;
     view = Matrix{{kOne, 0, 0, 0, 0, kOne, 0, 0, 0, 0, kOne, 0}};
@@ -245,20 +251,14 @@ int load_model(int slot, const uint8_t *data, std::size_t size) {
         for (int k = 0; k < corners; ++k)
             if (read_u16(face + 10 + k * 2) >= vertex_count) return kBadModel;
     }
+    if ((reinterpret_cast<uintptr_t>(data) & 1u) != 0) return kBadModel;
+    // Little-endian packed records on a little-endian target: used in place.
     Model loaded{};
-    loaded.vertices = static_cast<Vertex *>(std::malloc(sizeof(Vertex) * vertex_count));
-    loaded.faces = static_cast<Face *>(std::malloc(sizeof(Face) * face_count));
-    if (loaded.vertices == nullptr || loaded.faces == nullptr) {
-        free_model(loaded);
-        return kNoMemory;
-    }
-    // Little-endian packed records and a little-endian target: a plain copy.
-    std::memcpy(loaded.vertices, data + 8, sizeof(Vertex) * vertex_count);
-    std::memcpy(loaded.faces, face_bytes, sizeof(Face) * face_count);
+    loaded.vertices = reinterpret_cast<const Vertex *>(data + 8);
+    loaded.faces = reinterpret_cast<const Face *>(face_bytes);
     loaded.vertex_count = vertex_count;
     loaded.face_count = face_count;
     loaded.flags = read_u16(data + 6);
-    free_model(models[slot]);
     models[slot] = loaded;
     return kOk;
 }
@@ -289,10 +289,16 @@ void set_light(const Light &value) {
 
 void set_fog(const Fog &value) { fog = value; }
 
-int build_item(const uint8_t *item, bool wire, scene::Poly *out, int capacity) {
+int build_item(const uint8_t *item, bool wire, scene::Poly *out, int capacity, int *next_face) {
+    int ignored = 0;
+    int &resume = next_face != nullptr ? *next_face : ignored;
     const uint16_t slot = read_u16(item), flags = read_u16(item + 2);
-    if (!(flags & kEnable) || !model_loaded(slot) || capacity <= 0) return 0;
+    if (!(flags & kEnable) || !model_loaded(slot)) {
+        resume = model_loaded(slot) ? models[slot].face_count : 0;
+        return 0;
+    }
     const Model &model = models[slot];
+    if (resume >= model.face_count) return 0;
     const uint16_t color_mod = read_u16(item + 24);
     const uint8_t alpha = item[26] ? item[26] : 255;
     uint8_t poly_flags = (wire || (flags & kWire)) ? scene::kPolyWire : 0;
@@ -301,13 +307,12 @@ int build_item(const uint8_t *item, bool wire, scene::Poly *out, int capacity) {
                             read_i32(item + 16), read_i32(item + 20), read_u16(item + 10));
     const Matrix modelview = multiply(view, pose);
 
-    if (scratch_size < model.vertex_count) {
-        auto *grown = static_cast<Transformed *>(std::realloc(scratch, sizeof(Transformed) * model.vertex_count));
-        if (grown == nullptr) return 0;
-        scratch = grown;
-        scratch_size = model.vertex_count;
+    if (scratch == nullptr || scratch_size < model.vertex_count) {
+        resume = model.face_count;
+        return 0;
     }
-    for (int i = 0; i < model.vertex_count; ++i) {
+    // A resumed call continues the same item: the scratch already holds it.
+    for (int i = 0; resume == 0 && i < model.vertex_count; ++i) {
         const Vertex &v = model.vertices[i];
         Transformed &t = scratch[i];
         t.x = transform_axis(&modelview.m[0], v.x, v.y, v.z);
@@ -317,7 +322,8 @@ int build_item(const uint8_t *item, bool wire, scene::Poly *out, int capacity) {
     }
 
     int written = 0;
-    for (int i = 0; i < model.face_count && written < capacity; ++i) {
+    int i = resume;
+    for (; i < model.face_count && written < capacity; ++i) {
         const Face &face = model.faces[i];
         CameraPoint corners[scene::kPolyVertices];
         int visible = 0;
@@ -391,6 +397,7 @@ int build_item(const uint8_t *item, bool wire, scene::Poly *out, int capacity) {
         if ((poly.flags & scene::kPolyAdd) || alpha < 255) poly.flags |= scene::kPolyNoZWrite;
         ++written;
     }
+    resume = i;
     return written;
 }
 

@@ -3,6 +3,7 @@
 #include "n3d_engine.h"
 #include "scene_engine.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
@@ -86,13 +87,25 @@ std::vector<uint16_t> screen() {
 
 uint16_t at(const std::vector<uint16_t> &pixels, int x, int y) { return native::byte_swap(pixels[y * 320 + x]); }
 
+int build(const uint8_t *data, bool wire, scene::Poly *out, int capacity) {
+    int next_face = 0;
+    return n3d::build_item(data, wire, out, capacity, &next_face);
+}
+
 void flat(n3d::Light *light, n3d::Fog *fog) {
     *light = n3d::Light{0, 0, -16384, 255};  // full ambient: colours stay as given
     *fog = n3d::Fog{0, 0, 0};                // off
 }
 
+alignas(8) uint8_t frame_memory[64 * 1024];
+alignas(8) uint8_t chunk_memory[scene::kPolyChunks][4096];
+alignas(8) uint8_t z_memory[scene::kBandRows][640];
+alignas(8) uint8_t item_memory[scene::kItemChunks][4096];
+alignas(8) uint8_t scratch[16 * 1024];
+
 void geometry() {
     n3d::reset();
+    n3d::set_scratch(scratch, sizeof(scratch));
     assert(n3d::load_model(0, nullptr, 0) == n3d::kBadModel);
     assert(n3d::load_model(-1, nullptr, 0) == n3d::kBadSlot && n3d::load_model(n3d::kModelCapacity, nullptr, 0) == n3d::kBadSlot);
     auto bad = model(kSquare, {{{0, 1, 9}, 1}});
@@ -119,7 +132,7 @@ void geometry() {
     scene::Poly polys[8];
     const auto square = item(0, 0, 0, 0);
     // Only the face wound towards the camera survives culling.
-    assert(n3d::build_item(square.data(), false, polys, 8) == 1);
+    assert(build(square.data(), false, polys, 8) == 1);
     const scene::Poly &poly = polys[0];
     assert(poly.count == 4 && poly.alpha == 255 && !(poly.flags & scene::kPolyWire));
     int min_x = 999, max_x = -999, min_y = 999, max_y = -999;
@@ -134,31 +147,48 @@ void geometry() {
     assert(min_x + max_x == 2 * 160 && min_y + max_y == 2 * 127);
     assert(max_x - min_x >= 32 && max_x - min_x <= 36);
     // Wire frames keep both faces; a disabled item or an empty slot gives none.
-    assert(n3d::build_item(square.data(), true, polys, 8) == 2 && (polys[0].flags & scene::kPolyWire));
+    assert(build(square.data(), true, polys, 8) == 2 && (polys[0].flags & scene::kPolyWire));
     const auto off = item(0, 0, 0, 0, 0);
-    assert(n3d::build_item(off.data(), false, polys, 8) == 0);
+    assert(build(off.data(), false, polys, 8) == 0);
     const auto empty = item(5, 0, 0, 0);
-    assert(n3d::build_item(empty.data(), false, polys, 8) == 0);
+    assert(build(empty.data(), false, polys, 8) == 0);
     // Translucent or additive items do not write depth.
     const auto ghost = item(0, 0, 0, 0, n3d::kEnable | n3d::kAdd, 0xffff, 128);
-    assert(n3d::build_item(ghost.data(), false, polys, 8) == 1);
+    assert(build(ghost.data(), false, polys, 8) == 1);
     assert((polys[0].flags & scene::kPolyAdd) && (polys[0].flags & scene::kPolyNoZWrite) && polys[0].alpha == 128);
     // A colour override replaces the face colour.
     const auto tinted = item(0, 0, 0, 0, n3d::kEnable, 0x001f);
-    assert(n3d::build_item(tinted.data(), false, polys, 8) == 1 && polys[0].color == 0x001f);
+    assert(build(tinted.data(), false, polys, 8) == 1 && polys[0].color == 0x001f);
+    // Filling the list piece by piece: a one-polygon piece takes one face and
+    // the next call resumes after it.
+    {
+        int next_face = 0;
+        assert(n3d::build_item(square.data(), true, polys, 1, &next_face) == 1 && next_face == 1);
+        assert(n3d::build_item(square.data(), true, polys + 1, 1, &next_face) == 1 && next_face == 2);
+        assert(n3d::build_item(square.data(), true, polys + 2, 1, &next_face) == 0 && next_face == 2);
+    }
     // Behind the camera: nothing.
     const auto behind = item(0, 0, 0, -400);
-    assert(n3d::build_item(behind.data(), false, polys, 8) == 0);
+    assert(build(behind.data(), false, polys, 8) == 0);
     // Crossing the near plane: clipped, not dropped.
     const auto close = item(0, 0, 0, -238);
     std::vector<std::vector<int>> slab = {{-20, -20, -10}, {20, -20, -10}, {20, 20, 10}, {-20, 20, 10}};
     auto tilted = model(slab, {{{0, 1, 2, 3}, 0xf800}, {{3, 2, 1, 0}, 0x07e0}}, 1);
     assert(n3d::load_model(1, tilted.data(), tilted.size()) == n3d::kOk);
     auto near_item = item(1, 0, 0, -236);
-    const int clipped = n3d::build_item(near_item.data(), false, polys, 8);
+    const int clipped = build(near_item.data(), false, polys, 8);
     assert(clipped >= 1);
     for (int k = 0; k < polys[0].count; ++k) assert(polys[0].z[k] >= 1);
     (void)close;
+
+    // Without enough scratch an item draws nothing rather than overrunning.
+    n3d::set_scratch(scratch, n3d::scratch_bytes(3));
+    assert(build(square.data(), false, polys, 8) == 0);
+    n3d::set_scratch(scratch, sizeof(scratch));
+    // A model is used in place, so it must be 2-byte aligned.
+    std::vector<uint8_t> shifted(good.size() + 1);
+    std::copy(good.begin(), good.end(), shifted.begin() + 1);
+    assert(n3d::load_model(3, shifted.data() + 1, good.size()) == n3d::kBadModel || ((reinterpret_cast<uintptr_t>(shifted.data() + 1) & 1) == 0));
 
     // Points.
     std::vector<uint8_t> points;
@@ -171,8 +201,19 @@ void geometry() {
 }
 
 void rasterizer() {
-    assert(scene::begin() && scene::begin_3d() && scene::polys() != nullptr);
-    scene::Poly *list = scene::polys();
+    assert(scene::poly_chunk_bytes() <= sizeof(chunk_memory[0]) && scene::z_row_bytes() == sizeof(z_memory[0]));
+    assert(scene::poly_chunk_bytes() < 4096);
+    void *items[scene::kItemChunks];
+    for (int i = 0; i < scene::kItemChunks; ++i) items[i] = item_memory[i];
+    assert(scene::begin(frame_memory, sizeof(frame_memory), items, sizeof(item_memory[0])));
+    void *rows[scene::kBandRows];
+    for (int i = 0; i < scene::kBandRows; ++i) rows[i] = z_memory[i];
+    void *chunks[scene::kPolyChunks];
+    for (int i = 0; i < scene::kPolyChunks; ++i) chunks[i] = chunk_memory[i];
+    assert(!scene::begin_3d(chunks, scene::poly_chunk_bytes() - 1, rows, sizeof(z_memory[0])));
+    assert(!scene::begin_3d(chunks, sizeof(chunk_memory[0]), rows, scene::z_row_bytes() - 1));
+    assert(scene::begin_3d(chunks, sizeof(chunk_memory[0]), rows, sizeof(z_memory[0])) && scene::ready_3d());
+    scene::Poly *list = scene::poly_chunk(0);
     auto square = [](scene::Poly &p, int x0, int y0, int x1, int y1, uint16_t z, uint16_t color) {
         p = scene::Poly{};
         p.count = 4;
@@ -214,9 +255,15 @@ void rasterizer() {
     assert(scene::prepare(nullptr, 0, 0x0000, 1, true) == 0);
     pixels = screen();
     assert(at(pixels, 0, 0) == 0x07e0 && at(pixels, 319, 239) == 0x07e0);
+    // Polygon 32 lives in the second piece of the list and is drawn too.
+    for (int i = 0; i < scene::kPolyChunk; ++i) scene::poly_chunk(0)[i].alpha = 0;
+    square(scene::poly_chunk(1)[0], 200, 200, 220, 220, 2000, 0xf81f);
+    assert(scene::prepare(nullptr, 0, 0x0000, scene::kPolyChunk + 1, true) == 0);
+    pixels = screen();
+    assert(at(pixels, 210, 210) == 0xf81f && at(pixels, 100, 100) == 0);
     assert(scene::prepare(nullptr, 0, 0, scene::kPolyCapacity + 1, true) == scene::kNotReady);
     scene::end();
-    assert(scene::polys() == nullptr);
+    assert(!scene::ready_3d() && scene::poly_chunk(0) == nullptr);
 }
 
 }  // namespace

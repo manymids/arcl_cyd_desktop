@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 
@@ -11,6 +13,7 @@ extern "C" {
 #include "phys_engine.h"
 #include "mesh_engine.h"
 #include "n3d_engine.h"
+#include "scene_engine.h"
 #include "screen/keyboard.h"
 
 extern "C" void cyd_desktop_sd_set_boot_error(int error);
@@ -29,7 +32,8 @@ extern "C" void cyd_desktop_game_note_dropped_triangles(int count);
 extern "C" bool cyd_desktop_game_image_set(int slot, const uint16_t *pixels, int width, int height);
 extern "C" bool cyd_desktop_game_bitmap(int slot, int x, int y, int scale, int flags);
 extern "C" void cyd_desktop_overlay_clear(void);
-extern "C" int cyd_desktop_scene_begin(void);
+extern "C" int cyd_desktop_scene_begin(void *frame, void *const items[]);
+extern "C" int cyd_desktop_scene_begin_3d(void *const polys[], void *const z_rows[]);
 extern "C" void cyd_desktop_scene_end(void);
 extern "C" bool cyd_desktop_scene_image(int slot, const uint16_t *pixels, int width, int height);
 extern "C" void cyd_desktop_scene_overlay_clear(void);
@@ -296,23 +300,27 @@ mp_obj_t game_meshes(mp_obj_t camera_obj, mp_obj_t instances_obj) {
         for (int field = 0; field < 7; ++field) *values[field] = static_cast<float>(mp_obj_get_float(item[field + 1]));
     }
     constexpr int kCapacity = 256;
-    auto *triangles = static_cast<mesh::Triangle *>(std::malloc(sizeof(mesh::Triangle) * kCapacity));
-    if (triangles == nullptr) mp_raise_msg(&mp_type_MemoryError, MP_ERROR_TEXT("mesh triangles"));
-    int dropped = 0;
-    const int count = mesh::project(camera, instances, static_cast<int>(instance_count), triangles, kCapacity, &dropped);
-    if (count < 0) {
-        std::free(triangles);
-        if (count == mesh::kNoMemory) mp_raise_msg(&mp_type_MemoryError, MP_ERROR_TEXT("mesh scene"));
-        if (count == mesh::kBadTransform) mp_raise_ValueError(MP_ERROR_TEXT("invalid mesh transform"));
-        if (count == mesh::kTooMany) mp_raise_ValueError(MP_ERROR_TEXT("mesh scene face budget"));
+    const int faces = mesh::count_faces(camera, instances, static_cast<int>(instance_count));
+    if (faces < 0) {
+        if (faces == mesh::kBadTransform) mp_raise_ValueError(MP_ERROR_TEXT("invalid mesh transform"));
+        if (faces == mesh::kTooMany) mp_raise_ValueError(MP_ERROR_TEXT("mesh scene face budget"));
         mp_raise_ValueError(MP_ERROR_TEXT("invalid mesh"));
     }
+    // Per-call working memory from the MicroPython heap (kept alive by this C
+    // stack while in use, reclaimed by the collector), never the ESP-IDF heap.
+    const std::size_t scratch_size = mesh::scratch_bytes(faces);
+    auto *scratch = m_new(uint64_t, (scratch_size + 7) / 8);
+    auto *triangles = m_new(mesh::Triangle, kCapacity);
+    int dropped = 0;
+    const int count = mesh::project(camera, instances, static_cast<int>(instance_count), triangles, kCapacity,
+                                    &dropped, scratch, scratch_size);
+    m_del(uint64_t, scratch, (scratch_size + 7) / 8);
     int added = 0;
     for (int index = 0; index < count; ++index) {
         const mesh::Triangle &t = triangles[index];
         if (cyd_desktop_game_triangle(t.x0, t.y0, t.x1, t.y1, t.x2, t.y2, t.color, t.wire ? 1 : 0)) ++added;
     }
-    std::free(triangles);
+    m_del(mesh::Triangle, triangles, kCapacity);
     cyd_desktop_game_note_dropped_triangles(dropped);
     return MP_OBJ_NEW_SMALL_INT(added);
 }
@@ -340,14 +348,33 @@ mp_obj_t n3d_reset() {
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(n3d_reset_obj, n3d_reset);
 
+// The model bytes are used in place: cyd.py keeps them until the slot is
+// replaced or n3d_reset().
 mp_obj_t n3d_load(mp_obj_t slot_obj, mp_obj_t data_obj) {
     mp_buffer_info_t data;
     mp_get_buffer_raise(data_obj, &data, MP_BUFFER_READ);
-    const int result = n3d::load_model(mp_obj_get_int(slot_obj), static_cast<const uint8_t *>(data.buf), data.len);
-    if (result == n3d::kNoMemory) mp_raise_msg(&mp_type_MemoryError, MP_ERROR_TEXT("N3D model allocation failed"));
-    if (result != n3d::kOk) mp_raise_ValueError(MP_ERROR_TEXT("invalid N3D model"));
+    if (n3d::load_model(mp_obj_get_int(slot_obj), static_cast<const uint8_t *>(data.buf), data.len) != n3d::kOk)
+        mp_raise_ValueError(MP_ERROR_TEXT("invalid N3D model"));
     return mp_const_none;
 }
+
+mp_obj_t n3d_scratch_bytes(mp_obj_t vertices) {
+    return mp_obj_new_int(static_cast<mp_int_t>(n3d::scratch_bytes(mp_obj_get_int(vertices))));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(n3d_scratch_bytes_obj, n3d_scratch_bytes);
+
+// n3d_scratch(bytearray_or_None): the per-vertex working memory, kept by cyd.py.
+mp_obj_t n3d_scratch(mp_obj_t memory_obj) {
+    if (memory_obj == mp_const_none) {
+        n3d::set_scratch(nullptr, 0);
+        return mp_const_none;
+    }
+    mp_buffer_info_t memory;
+    mp_get_buffer_raise(memory_obj, &memory, MP_BUFFER_WRITE);
+    n3d::set_scratch(memory.buf, memory.len);
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(n3d_scratch_obj, n3d_scratch);
 static MP_DEFINE_CONST_FUN_OBJ_2(n3d_load_obj, n3d_load);
 
 mp_obj_t n3d_view(mp_obj_t camera_obj, mp_obj_t matrix_obj) {
@@ -422,8 +449,60 @@ mp_obj_t n3d_frame(size_t, const mp_obj_t *args) {
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(n3d_frame_obj, 7, 7, n3d_frame);
 
 // Sprite scene (API level 10).
-mp_obj_t scene_begin() { return mp_obj_new_int(cyd_desktop_scene_begin()); }
-static MP_DEFINE_CONST_FUN_OBJ_0(scene_begin_obj, scene_begin);
+// The scene's working memory, in pieces of a few KB: the app's bytearrays
+// when cyd.py passes them (the MicroPython heap had the room), otherwise taken
+// from the ESP-IDF heap by screen_scene.cpp and freed when the scene ends.
+// scene_sizes() -> (frame, (item piece, n), (polygon piece, n), (Z row, n))
+mp_obj_t scene_sizes() {
+    namespace scene = cyd::desktop::scene;
+    auto pair = [](std::size_t bytes, int count) {
+        mp_obj_t items[2] = {mp_obj_new_int(static_cast<mp_int_t>(bytes)), mp_obj_new_int(count)};
+        return mp_obj_new_tuple(2, items);
+    };
+    mp_obj_t sizes[4] = {mp_obj_new_int(static_cast<mp_int_t>(scene::frame_bytes())),
+                         pair(scene::item_chunk_bytes(), scene::kItemChunks),
+                         pair(scene::poly_chunk_bytes(), scene::kPolyChunks),
+                         pair(scene::z_row_bytes(), scene::kBandRows)};
+    return mp_obj_new_tuple(4, sizes);
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(scene_sizes_obj, scene_sizes);
+
+// Pointers of `count` bytearrays of at least `bytes` each, 8-byte aligned.
+void buffer_pieces(mp_obj_t sequence, int count, std::size_t bytes, void **pointers) {
+    mp_obj_t *items;
+    mp_obj_get_array_fixed_n(sequence, count, &items);
+    for (int index = 0; index < count; ++index) {
+        mp_buffer_info_t piece;
+        mp_get_buffer_raise(items[index], &piece, MP_BUFFER_WRITE);
+        if (piece.len < bytes || (reinterpret_cast<uintptr_t>(piece.buf) & 7u) != 0)
+            mp_raise_ValueError(MP_ERROR_TEXT("scene memory piece"));
+        pointers[index] = piece.buf;
+    }
+}
+
+// scene_begin(frame_or_None, item_pieces_or_None)
+mp_obj_t scene_begin(mp_obj_t frame_obj, mp_obj_t items_obj) {
+    namespace scene = cyd::desktop::scene;
+    if (frame_obj == mp_const_none) return mp_obj_new_int(cyd_desktop_scene_begin(nullptr, nullptr));
+    void *frame[1];
+    void *items[scene::kItemChunks];
+    buffer_pieces(mp_obj_new_tuple(1, &frame_obj), 1, scene::frame_bytes(), frame);
+    buffer_pieces(items_obj, scene::kItemChunks, scene::item_chunk_bytes(), items);
+    return mp_obj_new_int(cyd_desktop_scene_begin(frame[0], items));
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(scene_begin_obj, scene_begin);
+
+// scene_begin_3d(polygon_pieces_or_None, z_rows_or_None)
+mp_obj_t scene_begin_3d(mp_obj_t polys_obj, mp_obj_t rows_obj) {
+    namespace scene = cyd::desktop::scene;
+    if (polys_obj == mp_const_none) return mp_obj_new_int(cyd_desktop_scene_begin_3d(nullptr, nullptr));
+    void *polys[scene::kPolyChunks];
+    void *rows[scene::kBandRows];
+    buffer_pieces(polys_obj, scene::kPolyChunks, scene::poly_chunk_bytes(), polys);
+    buffer_pieces(rows_obj, scene::kBandRows, scene::z_row_bytes(), rows);
+    return mp_obj_new_int(cyd_desktop_scene_begin_3d(polys, rows));
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(scene_begin_3d_obj, scene_begin_3d);
 
 mp_obj_t scene_end() {
     cyd_desktop_scene_end();
@@ -827,10 +906,14 @@ const mp_rom_map_elem_t globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_game_meshes), MP_ROM_PTR(&game_meshes_obj)},
     {MP_ROM_QSTR(MP_QSTR_n3d_reset), MP_ROM_PTR(&n3d_reset_obj)},
     {MP_ROM_QSTR(MP_QSTR_n3d_load), MP_ROM_PTR(&n3d_load_obj)},
+    {MP_ROM_QSTR(MP_QSTR_n3d_scratch), MP_ROM_PTR(&n3d_scratch_obj)},
+    {MP_ROM_QSTR(MP_QSTR_n3d_scratch_bytes), MP_ROM_PTR(&n3d_scratch_bytes_obj)},
     {MP_ROM_QSTR(MP_QSTR_n3d_view), MP_ROM_PTR(&n3d_view_obj)},
     {MP_ROM_QSTR(MP_QSTR_n3d_project), MP_ROM_PTR(&n3d_project_obj)},
     {MP_ROM_QSTR(MP_QSTR_n3d_frame), MP_ROM_PTR(&n3d_frame_obj)},
+    {MP_ROM_QSTR(MP_QSTR_scene_sizes), MP_ROM_PTR(&scene_sizes_obj)},
     {MP_ROM_QSTR(MP_QSTR_scene_begin), MP_ROM_PTR(&scene_begin_obj)},
+    {MP_ROM_QSTR(MP_QSTR_scene_begin_3d), MP_ROM_PTR(&scene_begin_3d_obj)},
     {MP_ROM_QSTR(MP_QSTR_scene_end), MP_ROM_PTR(&scene_end_obj)},
     {MP_ROM_QSTR(MP_QSTR_scene_image), MP_ROM_PTR(&scene_image_obj)},
     {MP_ROM_QSTR(MP_QSTR_scene_overlay_clear), MP_ROM_PTR(&scene_overlay_clear_obj)},

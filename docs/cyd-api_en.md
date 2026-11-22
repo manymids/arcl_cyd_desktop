@@ -829,6 +829,9 @@ scale, colour, alpha)`. Flags combine `cyd.N3D_ENABLE` (draw), `cyd.N3D_ADD` (ad
 | `fog` | `(colour, start, end)` in Q16.16; end ≤ start turns it off; default (0x0001, 600, 2400) |
 
 Returns the number of polygons drawn (up to 320), or -1 once the scene view has been closed.
-`viewport_width` may only be omitted or 320. The first `cyd.n3d_present()` allocates about 32 KB for the
-polygon list and the one-band Z buffer, freed when the app ends. Eight cubes (22 polygons) with a sprite and
+`viewport_width` may only be omitted or 320. The first `cyd.n3d_present()` takes about 32 KB for the polygon
+list and the one-band Z buffer (the scene's frame description is about 9 KB more), in pieces of 4 KB or less:
+on the MicroPython heap when it has the room, otherwise on the ESP-IDF heap, and released when the app ends.
+Small pieces fit even in a heap fragmented by video or heavy apps. Models and the vertex scratch live on
+the app's heap. Eight cubes (22 polygons) with a sprite and
 the overlay on top run at about 18 fps on the board.

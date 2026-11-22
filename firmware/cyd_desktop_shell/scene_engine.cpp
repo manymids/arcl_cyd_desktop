@@ -53,19 +53,18 @@ struct Frame {
     uint16_t item_count;
     uint8_t overlay_count;
     uint8_t queued_count;
-    Item items[kItemCapacity];
     Overlay overlays[kOverlayCapacity];
     Overlay queued[kOverlayCapacity];
 };
 
 Image images[kImageCapacity]{};
 Frame *frame = nullptr;
-// 3D: the polygon list and a Z buffer one band high, allocated by begin_3d().
-Poly *poly_list = nullptr;
-uint16_t *z_band = nullptr;
+// 3D: the polygon list pieces and a Z buffer one band high, given to begin_3d().
+Poly *poly_chunks[kPolyChunks]{};
+Item *item_chunks[kItemChunks]{};
+uint16_t *z_rows[kBandRows]{};
 int poly_count = 0;
 bool z_enabled = true;
-constexpr int kBandRows = 16;
 
 uint16_t read_u16(const uint8_t *bytes) { return static_cast<uint16_t>(bytes[0] | (bytes[1] << 8)); }
 int16_t read_i16(const uint8_t *bytes) { return static_cast<int16_t>(read_u16(bytes)); }
@@ -270,7 +269,7 @@ void fill_span_3d(const native::TileSurface &surface, int y, int x0, int x1, int
     const bool add = (poly.flags & kPolyAdd) != 0;
     const bool solid = !add && poly.alpha >= 255;
     uint16_t *row = surface.pixels + static_cast<std::size_t>(y - surface.origin_y) * surface.stride;
-    uint16_t *depth = z_band + static_cast<std::size_t>(y - surface.origin_y) * kWidth;
+    uint16_t *depth = z_rows[y - surface.origin_y];
     const uint16_t swapped = native::byte_swap(poly.color);
     for (int x = x0; x < x1; ++x, z += static_cast<uint32_t>(dz)) {
         if (test) {
@@ -425,28 +424,68 @@ void draw_overlay(const native::TileSurface &surface, const Overlay &item) {
 
 }  // namespace
 
-bool begin() {
+namespace {
+
+constexpr std::size_t kPolyChunkBytes = sizeof(Poly) * kPolyChunk;
+constexpr std::size_t kItemChunkBytes = sizeof(Item) * kItemChunk;
+constexpr std::size_t kZRowBytes = sizeof(uint16_t) * kWidth;
+
+Item &item_at(int index) { return item_chunks[index / kItemChunk][index % kItemChunk]; }
+
+bool usable(const void *memory, std::size_t size, std::size_t needed) {
+    return memory != nullptr && size >= needed && (reinterpret_cast<uintptr_t>(memory) & 7u) == 0;
+}
+
+}  // namespace
+
+std::size_t frame_bytes() { return sizeof(Frame); }
+std::size_t poly_chunk_bytes() { return kPolyChunkBytes; }
+std::size_t item_chunk_bytes() { return kItemChunkBytes; }
+std::size_t z_row_bytes() { return kZRowBytes; }
+
+bool begin(void *memory, std::size_t size, void *const items[kItemChunks], std::size_t item_size) {
     if (frame != nullptr) return true;
-    frame = static_cast<Frame *>(std::calloc(1, sizeof(Frame)));
-    return frame != nullptr;
+    if (!usable(memory, size, sizeof(Frame)) || items == nullptr) return false;
+    for (int index = 0; index < kItemChunks; ++index)
+        if (!usable(items[index], item_size, kItemChunkBytes)) return false;
+    std::memset(memory, 0, sizeof(Frame));
+    for (int index = 0; index < kItemChunks; ++index) {
+        std::memset(items[index], 0, kItemChunkBytes);
+        item_chunks[index] = static_cast<Item *>(items[index]);
+    }
+    frame = static_cast<Frame *>(memory);
+    return true;
 }
 
-bool begin_3d() {
+bool begin_3d(void *const chunks[kPolyChunks], std::size_t chunk_size, void *const rows[kBandRows],
+              std::size_t row_size) {
     if (frame == nullptr) return false;
-    if (poly_list == nullptr) poly_list = static_cast<Poly *>(std::calloc(kPolyCapacity, sizeof(Poly)));
-    if (z_band == nullptr) z_band = static_cast<uint16_t *>(std::calloc(kWidth * kBandRows, sizeof(uint16_t)));
-    return poly_list != nullptr && z_band != nullptr;
+    if (z_rows[0] != nullptr) return true;
+    if (chunks == nullptr || rows == nullptr) return false;
+    for (int index = 0; index < kPolyChunks; ++index)
+        if (!usable(chunks[index], chunk_size, kPolyChunkBytes)) return false;
+    for (int index = 0; index < kBandRows; ++index)
+        if (!usable(rows[index], row_size, kZRowBytes)) return false;
+    for (int index = 0; index < kPolyChunks; ++index) {
+        std::memset(chunks[index], 0, kPolyChunkBytes);
+        poly_chunks[index] = static_cast<Poly *>(chunks[index]);
+    }
+    for (int index = 0; index < kBandRows; ++index) {
+        std::memset(rows[index], 0, kZRowBytes);
+        z_rows[index] = static_cast<uint16_t *>(rows[index]);
+    }
+    return true;
 }
 
-Poly *polys() { return poly_list; }
+bool ready_3d() { return z_rows[0] != nullptr; }
+
+Poly *poly_chunk(int index) { return index >= 0 && index < kPolyChunks ? poly_chunks[index] : nullptr; }
 
 void end() {
-    std::free(frame);
     frame = nullptr;
-    std::free(poly_list);
-    poly_list = nullptr;
-    std::free(z_band);
-    z_band = nullptr;
+    for (Poly *&chunk : poly_chunks) chunk = nullptr;
+    for (Item *&chunk : item_chunks) chunk = nullptr;
+    for (uint16_t *&row : z_rows) row = nullptr;
     poly_count = 0;
     for (Image &image : images) image = Image{};
 }
@@ -500,7 +539,7 @@ bool valid_records(const uint8_t *records, std::size_t size) {
 
 int prepare(const uint8_t *records, std::size_t size, uint16_t background, int polygons, bool z_buffer) {
     if (frame == nullptr) return kNotReady;
-    if (polygons < 0 || polygons > kPolyCapacity || (polygons > 0 && poly_list == nullptr)) return kNotReady;
+    if (polygons < 0 || polygons > kPolyCapacity || (polygons > 0 && !ready_3d())) return kNotReady;
     if (size % kRecordBytes != 0 || size / kRecordBytes > static_cast<std::size_t>(kItemCapacity)) return kBadRecords;
     const int count = static_cast<int>(size / kRecordBytes);
     // Check everything first, so a bad record leaves the shown frame alone.
@@ -518,7 +557,7 @@ int prepare(const uint8_t *records, std::size_t size, uint16_t background, int p
     for (int index = 0; index < count; ++index) {
         const uint8_t *row = records + static_cast<std::size_t>(order[index]) * kRecordBytes;
         if (row[18] == 0) continue;  // alpha 0 draws nothing
-        build(row, frame->items[shown++]);
+        build(row, item_at(shown++));
     }
     frame->item_count = static_cast<uint16_t>(shown);
     frame->background = background;
@@ -536,23 +575,34 @@ void render(const native::TileSurface &surface) {
         return;
     }
     surface.fill(frame->background);
-    if (poly_count > 0 && z_band != nullptr && surface.height <= kBandRows) {
-        std::fill(z_band, z_band + kWidth * kBandRows, static_cast<uint16_t>(0));
-        for (int index = 0; index < poly_count; ++index) draw_poly(surface, poly_list[index]);
+    if (poly_count > 0 && ready_3d() && surface.height <= kBandRows) {
+        for (int row = 0; row < surface.height; ++row) std::fill(z_rows[row], z_rows[row] + kWidth, static_cast<uint16_t>(0));
+        for (int index = 0; index < poly_count; ++index)
+            draw_poly(surface, poly_chunks[index / kPolyChunk][index % kPolyChunk]);
     }
-    for (int index = 0; index < frame->item_count; ++index) draw_item(surface, frame->items[index]);
+    for (int index = 0; index < frame->item_count; ++index) draw_item(surface, item_at(index));
     for (int index = 0; index < frame->overlay_count; ++index) draw_overlay(surface, frame->overlays[index]);
 }
 
 }  // namespace cyd::desktop::scene
 
+namespace cyd::desktop::scene {
+void (*scene_left)() = nullptr;
+}
+
 namespace cyd::desktop::native {
 
 namespace {
 
+using scene::scene_left;
+
 void enter() {}
-// Leaving the view drops the frame and the image pointers, like the tile map.
-void leave() { scene::end(); }
+// Leaving the view drops the frame and the image pointers, like the tile map;
+// screen_scene.cpp frees the memory behind them.
+void leave() {
+    scene::end();
+    if (scene_left != nullptr) scene_left();
+}
 // The script presents frames itself; the shell only repaints on request.
 bool update(uint32_t) { return false; }
 void input(const InputEvent &) {}

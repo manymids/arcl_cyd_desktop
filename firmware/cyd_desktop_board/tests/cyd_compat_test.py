@@ -33,6 +33,8 @@ class Shell:
         self.scene_overlays = []
         self.presented = []
         self.frames = []
+        self.n3d_models = {}
+        self.n3d_scratch_memory = None
 
     def game_touch(self):
         return self.touch
@@ -65,9 +67,32 @@ class Shell:
         self.overlays.append(args)
         return True
 
-    def scene_begin(self):
+    def scene_sizes(self):
+        return (1000, (150, 4), (200, 10), (64, 16))
+
+    def scene_begin(self, frame, items):
+        # cyd.py passes bytearrays when the MicroPython heap has the room, else None.
+        if frame is not None:
+            assert len(frame) == 1000 and len(items) == 4 and all(len(piece) == 150 for piece in items)
         self.scene = "front"
+        self.scene_pieces = (frame, items)
         return 0
+
+    def scene_begin_3d(self, polys, rows):
+        if polys is not None:
+            assert len(polys) == 10 and len(rows) == 16 and all(len(row) == 64 for row in rows)
+        self.scene_3d_calls = getattr(self, "scene_3d_calls", 0) + 1
+        self.scene_3d_pieces = (polys, rows)
+        return 0
+
+    def n3d_scratch_bytes(self, vertices):
+        return vertices * 16
+
+    def n3d_scratch(self, memory):
+        self.n3d_scratch_memory = memory
+
+    def n3d_load(self, slot, data):
+        self.n3d_models[slot] = data
 
     def scene_end(self):
         self.scene = None
@@ -115,6 +140,9 @@ def _lookup(name):
 
 fake.__getattr__ = _lookup
 sys.modules["_cyd_shell"] = fake
+import gc as _host_gc  # noqa: E402
+if not hasattr(_host_gc, "mem_free"):
+    _host_gc.mem_free = lambda: 1 << 20  # plenty: the host test takes the bytearray path
 
 import cyd  # noqa: E402
 
@@ -310,7 +338,22 @@ def test_n3d():
     shell.scene = "left"
     assert cyd.n3d_present(b"") == -1
     assert "n3d" in cyd.features()
+    # The 3D buffers and models are bytearrays owned by cyd.py, released with the app.
+    assert cyd._scene_3d_ready and shell.scene_3d_calls == 1, "the 3D buffers are set up once"
+    # With room on the (host) heap, cyd.py hands over its own pieces and keeps them.
+    assert shell.scene_3d_pieces[0] is cyd._scene_3d_pieces[0] and shell.scene_pieces[0] is cyd._scene_pieces[0][0]
+    cyd.n3d_load(3, model)
+    assert shell.n3d_models[3] is cyd._n3d_models[3] and bytes(cyd._n3d_models[3]) == model
+    assert len(shell.n3d_scratch_memory) == 4 * 16 and cyd._n3d_scratch_vertices == 4
+    try:
+        cyd.n3d_load(64, model)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("slot 64 accepted")
     cyd._set_app_root("next")
+    assert not cyd._scene_3d_ready and cyd._scene_pieces is None and cyd._scene_3d_pieces is None
+    assert cyd._n3d_models == [None] * cyd.N3D_MODELS and cyd._n3d_scratch_memory is None
 
 
 def main():

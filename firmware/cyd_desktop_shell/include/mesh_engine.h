@@ -52,9 +52,17 @@ enum Result : int {
     kNoMemory = -4,
 };
 
+// Checks the camera and instances and returns the scene's face count, or a
+// negative Result.
+int count_faces(const Camera &camera, const Instance *instances, int instance_count);
+// Scratch project() needs for a scene of `faces` faces (8-byte aligned).
+std::size_t scratch_bytes(int faces);
+
 // Writes up to `capacity` triangles, nearest last, and returns how many; the
-// rest are counted in *dropped. A negative Result leaves `out` unspecified.
+// rest are counted in *dropped. It works in the caller's `scratch` (at least
+// scratch_bytes(count_faces(...)) bytes) and allocates nothing; kNoMemory
+// when the scratch is too small. A negative Result leaves `out` unspecified.
 int project(const Camera &camera, const Instance *instances, int instance_count,
-            Triangle *out, int capacity, int *dropped);
+            Triangle *out, int capacity, int *dropped, void *scratch, std::size_t scratch_size);
 
 }  // namespace cyd::desktop::mesh

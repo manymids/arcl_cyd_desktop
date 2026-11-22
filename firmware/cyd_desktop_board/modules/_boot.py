@@ -237,6 +237,14 @@ def _run_app(app_id):
             _app_scope.end(scope)
         except BaseException:
             pass
+        # Collect now, with the app's objects and buffers (the scene, 3D and
+        # image memory) unreferenced: heap areas the app made MicroPython grow
+        # into are then empty and go back to ESP-IDF for video and Wi-Fi.
+        try:
+            import gc
+            gc.collect()
+        except BaseException:
+            pass
         for _attempt in range(3):
             try:
                 runtime_end()

@@ -6,12 +6,16 @@
 //
 // There is no frame buffer. A present sorts and pre-computes the frame's
 // sprites once, then the frame is rendered 16 rows at a time into the shell's
-// transition tile, so the cost in RAM is the frame description (allocated by
-// begin(), freed by end()) and never a 150 KB picture.
+// transition tile, so the cost in RAM is the frame description and never a
+// 150 KB picture.
 //
-// Sprite pixels stay in the app's MicroPython buffers: the engine keeps
-// pointers, like the tile map. cyd.py holds the buffers until it clears the
-// slots, and end() drops every pointer before they may be collected.
+// The engine allocates nothing. The frame description, the 3D polygon list
+// and the band Z buffer live in memory the caller hands to begin() and
+// begin_3d(), in pieces of a few KB so a fragmented heap can still supply
+// them. cyd.py gives bytearrays when the MicroPython heap already has the room
+// (after video, say); otherwise screen_scene.cpp takes the pieces from the
+// ESP-IDF heap and frees them when the scene ends. Sprite pixels stay in the
+// app's own buffers. end() drops every pointer.
 //
 // Plain C++ so the host tests can render bands.
 
@@ -23,7 +27,13 @@
 namespace cyd::desktop::scene {
 
 constexpr int kImageCapacity = 32;
-constexpr int kItemCapacity = 128;
+// The sprite list is kItemChunks pieces of kItemChunk sprites, and the 3D
+// Z buffer one row per piece: every piece of the scene's memory is a few KB
+// at most, so a heap fragmented by video or Wi-Fi can still supply it.
+constexpr int kItemChunk = 32;
+constexpr int kItemChunks = 4;
+constexpr int kItemCapacity = kItemChunk * kItemChunks;
+constexpr int kBandRows = 16;
 constexpr std::size_t kRecordBytes = 22;
 constexpr int kOverlayCapacity = 24;
 constexpr int kOverlayTextLength = 40;
@@ -35,7 +45,12 @@ enum Blend : uint8_t { kNormal = 0, kAdd = 1, kSubtract = 2, kMultiply = 3 };
 // Screen-space convex polygons from the N3D geometry (n3d_engine.cpp), drawn
 // under the sprites with a Z buffer one band high. Depth keys: larger is nearer.
 constexpr int kPolyVertices = 6;
-constexpr int kPolyCapacity = 320;
+// The polygon list is kPolyChunks separate pieces of kPolyChunk polygons, so
+// no single allocation is large: a fragmented heap after video or Wi-Fi
+// still has room for 2 KB blocks when it has none for 22 KB.
+constexpr int kPolyChunk = 32;
+constexpr int kPolyChunks = 10;
+constexpr int kPolyCapacity = kPolyChunk * kPolyChunks;
 enum PolyFlags : uint8_t {
     kPolyAdd = 0x02,
     kPolyWire = 0x04,
@@ -59,13 +74,24 @@ enum Result : int {
     kNotReady = -3,
 };
 
-// Allocates the frame description. True when ready (also when already ready).
-bool begin();
-// Also allocates the polygon list and the band Z buffer. Needs begin().
-bool begin_3d();
-// The polygon list n3d fills before prepare(); null before begin_3d().
-Poly *polys();
-// Frees it and forgets every image. Safe to call when there is none.
+// Bytes of each piece begin() and begin_3d() need; 8-byte aligned memory.
+std::size_t frame_bytes();
+std::size_t item_chunk_bytes();
+std::size_t poly_chunk_bytes();
+std::size_t z_row_bytes();
+// Adopts `memory` (zeroed here) for the frame header and kItemChunks pieces
+// for the sprite list. False when one is too small or misaligned. Calling it
+// again while ready keeps the old memory.
+bool begin(void *memory, std::size_t size, void *const item_chunks[kItemChunks], std::size_t item_chunk_size);
+// Adopts kPolyChunks pieces for the polygon list and kBandRows rows for the
+// band Z buffer. Needs begin().
+bool begin_3d(void *const chunks[kPolyChunks], std::size_t chunk_size, void *const z_rows[kBandRows],
+              std::size_t z_row_size);
+bool ready_3d();
+// Piece `index` of the polygon list n3d fills before prepare() (polygons
+// index*kPolyChunk onwards); null before begin_3d().
+Poly *poly_chunk(int index);
+// Drops the memory and every image pointer. Safe to call when there is none.
 void end();
 bool ready();
 
@@ -92,5 +118,9 @@ bool valid_records(const uint8_t *records, std::size_t size);
 
 // Renders one band of the shown frame.
 void render(const native::TileSurface &surface);
+
+// Called after the scene view's leave() has ended the scene, so the owner of
+// the memory can free it (set by screen_scene.cpp; null on the host).
+extern void (*scene_left)();
 
 }  // namespace cyd::desktop::scene

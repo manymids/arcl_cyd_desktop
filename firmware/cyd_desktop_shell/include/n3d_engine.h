@@ -9,6 +9,10 @@
 // per turn, focal length Q8.8 pixels. Depth keys are near/z mapped to
 // 1..65535, larger is nearer.
 //
+// It allocates nothing: models and the per-vertex scratch live in buffers
+// the caller keeps alive (cyd.py holds them as bytearrays on the
+// MicroPython heap), so 3D use does not fragment the ESP-IDF heap.
+//
 // Plain C++ so the host tests can transform models.
 
 #include <cstddef>
@@ -32,7 +36,7 @@ enum ItemFlags : uint16_t { kEnable = 0x01, kAdd = 0x04, kWire = 0x08 };
 enum Result : int {
     kOk = 0,
     kBadModel = -1,
-    kNoMemory = -2,
+    kNoMemory = -2,  // unused: kept so the numbers stay stable
     kBadSlot = -3,
 };
 
@@ -58,11 +62,19 @@ Light default_light();
 Fog default_fog();
 constexpr uint16_t kDefaultClear = 0x0001;
 
-// Frees every model and restores the defaults (app start and end).
+// Forgets every model and the scratch and restores the defaults (app start
+// and end). The caller may release their buffers afterwards.
 void reset();
 
-// Copies a packed model ("<HHhH" counts, radius, flags; "<hhh" vertices;
-// "<BBHhhhHHHH" faces) into slot `slot`.
+// Bytes of scratch build_item() needs for a model of `vertices` vertices.
+std::size_t scratch_bytes(int vertices);
+// Adopts `memory` as the per-vertex scratch (8-byte aligned). Models with more
+// vertices than it holds draw nothing.
+void set_scratch(void *memory, std::size_t size);
+
+// Uses a packed model ("<HHhH" counts, radius, flags; "<hhh" vertices;
+// "<BBHhhhHHHH" faces) in place as slot `slot`. `data` must be 2-byte aligned
+// and stay unchanged and alive until the slot is replaced or reset().
 int load_model(int slot, const uint8_t *data, std::size_t size);
 bool model_loaded(int slot);
 
@@ -78,7 +90,12 @@ void set_fog(const Fog &fog);
 // Transforms one 28-byte item through the view into polygons appended at
 // out[0..capacity). wire forces wire frames. Returns how many were written;
 // a disabled item or an empty slot writes none.
-int build_item(const uint8_t *item, bool wire, scene::Poly *out, int capacity);
+//
+// *next_face says where to start (0: transform the vertices first) and is set
+// to the face to resume from, or to the face count when the item is done, so
+// a caller filling the polygon list piece by piece calls again with the same
+// item and the next piece.
+int build_item(const uint8_t *item, bool wire, scene::Poly *out, int capacity, int *next_face);
 
 // Projects "<3i" Q16.16 world points to "<hhH" (sx, sy, depth; depth 0 is
 // behind the near plane). Returns how many were visible.

@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 
 namespace cyd::desktop::mesh {
 
@@ -37,9 +36,7 @@ int16_t coordinate(float value) {
 
 }  // namespace
 
-int project(const Camera &camera, const Instance *instances, int instance_count,
-            Triangle *out, int capacity, int *dropped) {
-    if (dropped != nullptr) *dropped = 0;
+int count_faces(const Camera &camera, const Instance *instances, int instance_count) {
     if (instance_count < 0 || instance_count > kMaxInstances) return kTooMany;
     for (float value : {camera.x, camera.y, camera.z, camera.yaw, camera.pitch, camera.roll, camera.focal})
         if (!sane(value)) return kBadTransform;
@@ -68,16 +65,27 @@ int project(const Camera &camera, const Instance *instances, int instance_count,
         scene_faces += static_cast<int>(faces);
         if (scene_faces > kMaxSceneFaces) return kTooMany;
     }
+    return scene_faces;
+}
 
-    Face *faces = static_cast<Face *>(std::malloc(sizeof(Face) * static_cast<std::size_t>(std::max(1, scene_faces))));
-    Face **order = static_cast<Face **>(std::malloc(sizeof(Face *) * static_cast<std::size_t>(std::max(1, scene_faces))));
-    Point *points = static_cast<Point *>(std::malloc(sizeof(Point) * kMaxVertices));
-    if (faces == nullptr || order == nullptr || points == nullptr) {
-        std::free(faces);
-        std::free(order);
-        std::free(points);
+std::size_t scratch_bytes(int faces) {
+    const std::size_t count = static_cast<std::size_t>(std::max(1, faces));
+    return sizeof(Point) * kMaxVertices + sizeof(Face) * count + sizeof(Face *) * count;
+}
+
+int project(const Camera &camera, const Instance *instances, int instance_count,
+            Triangle *out, int capacity, int *dropped, void *scratch, std::size_t scratch_size) {
+    if (dropped != nullptr) *dropped = 0;
+    const int scene_faces = count_faces(camera, instances, instance_count);
+    if (scene_faces < 0) return scene_faces;
+    if (scratch == nullptr || scratch_size < scratch_bytes(scene_faces) ||
+        (reinterpret_cast<uintptr_t>(scratch) & 7u) != 0)
         return kNoMemory;
-    }
+    // Points (8 bytes each), then the pointer array, then the faces: each part
+    // starts suitably aligned whatever the face count.
+    auto *points = static_cast<Point *>(scratch);
+    auto **order = reinterpret_cast<Face **>(points + kMaxVertices);
+    auto *faces = reinterpret_cast<Face *>(order + std::max(1, scene_faces));
 
     const float yaw = -camera.yaw, pitch = -camera.pitch, roll = -camera.roll;
     const float yc = std::cos(yaw), ys = std::sin(yaw), pc = std::cos(pitch), ps = std::sin(pitch);
@@ -152,9 +160,6 @@ int project(const Camera &camera, const Instance *instances, int instance_count,
         emit(*order[index], 1, 2);
         if (order[index]->count == 4) emit(*order[index], 2, 3);
     }
-    std::free(faces);
-    std::free(order);
-    std::free(points);
     if (dropped != nullptr) *dropped = refused;
     return written;
 }

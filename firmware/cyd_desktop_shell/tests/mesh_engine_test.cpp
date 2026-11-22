@@ -43,6 +43,12 @@ Instance at(const std::vector<uint8_t> &data, float z, float scale = 1.0f) {
 
 const Camera kCamera{0, 0, 0, 0, 0, 0, 100, false};
 
+alignas(8) uint8_t scratch[64 * 1024];
+
+int project(const Camera &camera, const Instance *instances, int count, Triangle *out, int capacity, int *dropped) {
+    return cyd::desktop::mesh::project(camera, instances, count, out, capacity, dropped, scratch, sizeof(scratch));
+}
+
 void projection_matches_the_pinhole_model() {
     // One triangle, wound so that it faces the camera.
     const auto data = mesh({{0, 0, 0}, {10, 0, 0}, {0, 10, 0}}, {{0xf800, {0, 1, 2}}});
@@ -115,6 +121,11 @@ void bad_input_is_refused() {
     std::vector<Instance> many(kMaxInstances + 1, at(good, 100));
     assert(project(kCamera, many.data(), static_cast<int>(many.size()), out, 4, nullptr) == kTooMany);
     assert(project(kCamera, nullptr, 0, out, 4, nullptr) == 0);
+    // Too little scratch is refused, not overrun.
+    instance = at(good, 100);
+    assert(count_faces(kCamera, &instance, 1) == 1);
+    assert(cyd::desktop::mesh::project(kCamera, &instance, 1, out, 4, nullptr, scratch, scratch_bytes(1) - 1) == kNoMemory);
+    assert(cyd::desktop::mesh::project(kCamera, &instance, 1, out, 4, nullptr, scratch, scratch_bytes(1)) >= 0);
 }
 
 }  // namespace

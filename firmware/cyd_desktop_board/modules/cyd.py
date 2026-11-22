@@ -17,10 +17,12 @@ from _cyd_shell import (app_button, app_clear, app_event, app_log, app_primitive
                          game_image_set as _game_image_set, game_bitmap as _game_bitmap,
                          overlay_clear as _overlay_clear, overlay_add as _overlay_add,
                          scene_begin as _scene_begin, scene_end as _scene_end, scene_image as _scene_image,
+                         scene_begin_3d as _scene_begin_3d, scene_sizes as _scene_sizes,
                          scene_overlay_clear as _scene_overlay_clear,
                          scene_overlay_add as _scene_overlay_add, scene_present as _scene_present,
                          buffer_copy as _buffer_copy, game_meshes as _game_meshes,
                          n3d_reset as _n3d_reset, n3d_load as _n3d_load, n3d_view as _n3d_view,
+                         n3d_scratch as _n3d_scratch, n3d_scratch_bytes as _n3d_scratch_bytes,
                          n3d_project as _n3d_project, n3d_frame as _n3d_frame,
                           game_touch as _game_touch, runtime_keepalive,
                           runtime_ping as _runtime_ping,
@@ -684,6 +686,7 @@ def _compat_reset():
     # start each app empty.
     _phys_reset(3, 0.0, -520.0, 0.0)
     _n3d_reset()
+    _n3d_release()
 
 
 def _report(ok, reason):
@@ -1000,22 +1003,47 @@ BLEND_MULTIPLY = 3
 
 _sprites = [None] * SPRITE_CAP
 _scene_used = False
+# Whether the 3D polygon list and Z buffer are set up. Their small pieces are
+# either the bytearrays below (when the MicroPython heap already had the room)
+# or held by the firmware on the ESP-IDF heap until the scene ends.
+_scene_3d_ready = False
+_scene_pieces = None
+_scene_3d_pieces = None
+
+
+def _scene_room(*groups):
+    """Bytearrays for these (piece bytes, count) groups if the MicroPython heap
+    can hold them without growing into the ESP-IDF heap, else None."""
+    import gc
+    needed = sum(size * count for size, count in groups)
+    gc.collect()
+    if gc.mem_free() < needed + 16384:
+        return None
+    return [[bytearray(size) for _ in range(count)] for size, count in groups]
 _SCENE_ERRORS = {-1: "not enough memory for the scene", -5: "no scene view", -6: "display busy"}
 
 
 def _scene_release():
-    global _scene_used
-    _scene_end()
+    global _scene_used, _scene_3d_ready, _scene_pieces, _scene_3d_pieces
+    _scene_end()  # drops the native pointers (and frees owned memory) first
     for slot in range(SPRITE_CAP):
         _sprites[slot] = None
+    _scene_pieces = None
+    _scene_3d_pieces = None
+    _scene_3d_ready = False
     _scene_used = False
 
 
 def _scene_enter():
-    global _scene_used, _ui_used, _video_used, _dirty, _game_mode
+    global _scene_used, _ui_used, _video_used, _dirty, _game_mode, _scene_pieces
     if _scene_used:
         return
-    result = _scene_begin()
+    frame_bytes, items = _scene_sizes()[:2]
+    _scene_pieces = _scene_room((frame_bytes, 1), items)
+    if _scene_pieces is None:
+        result = _scene_begin(None, None)
+    else:
+        result = _scene_begin(_scene_pieces[0][0], _scene_pieces[1])
     if result == -1:
         raise MemoryError(_SCENE_ERRORS[-1])
     if result != 0:
@@ -1166,6 +1194,21 @@ N3D_MODELS = 64
 N3D_ITEMS = 160
 N3D_POLYS = 320
 
+# Models are used in place by the native side, so this list keeps them; the
+# per-vertex scratch grows to the largest model loaded.
+_n3d_models = [None] * N3D_MODELS
+_n3d_scratch_memory = None
+_n3d_scratch_vertices = 0
+
+
+def _n3d_release():
+    """Forget the models and scratch (after the native side has, in _n3d_reset)."""
+    global _n3d_scratch_memory, _n3d_scratch_vertices
+    for slot in range(N3D_MODELS):
+        _n3d_models[slot] = None
+    _n3d_scratch_memory = None
+    _n3d_scratch_vertices = 0
+
 
 def _q16(value):
     return int(value * 65536) if isinstance(value, float) or -32768 <= value <= 32768 else int(value)
@@ -1177,7 +1220,19 @@ def _angle(value):
 
 def n3d_load(slot, model):
     """Copy a packed N3D model (see n3d_pack_model) into slot 0..N3D_MODELS-1."""
-    return _n3d_load(int(slot), model)
+    global _n3d_scratch_memory, _n3d_scratch_vertices
+    slot = int(slot)
+    if not 0 <= slot < N3D_MODELS:
+        raise ValueError("invalid N3D model")
+    copy = bytearray(model)  # the native side reads it in place
+    vertices = copy[0] | (copy[1] << 8) if len(copy) >= 2 else 0
+    if vertices > _n3d_scratch_vertices:
+        scratch = bytearray(_n3d_scratch_bytes(vertices))
+        _n3d_scratch(scratch)
+        _n3d_scratch_memory = scratch
+        _n3d_scratch_vertices = vertices
+    _n3d_load(slot, copy)
+    _n3d_models[slot] = copy
 
 
 def n3d_view(camera, matrix):
@@ -1246,9 +1301,21 @@ def n3d_present(items, sprites=None, *, clear=None, viewport_width=None, z_buffe
         raise ValueError("stars, stereo and the HUD are not available on the CYD")
     if viewport_width not in (None, 320):
         raise ValueError("the CYD viewport is 320 wide")
+    global _scene_3d_ready, _scene_3d_pieces
     if isinstance(items, (list, tuple)):
         items = _n3d_pack_items(items)
     _scene_enter()
+    if not _scene_3d_ready:
+        _scene_3d_pieces = _scene_room(*_scene_sizes()[2:])
+        if _scene_3d_pieces is None:
+            result = _scene_begin_3d(None, None)
+        else:
+            result = _scene_begin_3d(_scene_3d_pieces[0], _scene_3d_pieces[1])
+        if result == -1:
+            raise MemoryError("not enough memory for the 3D buffers")
+        if result != 0:
+            raise OSError(_SCENE_ERRORS.get(result, str(result)))
+        _scene_3d_ready = True
     result = _n3d_frame(items, sprites, clear, bool(z_buffer), projection, light, fog)
     if result == -2:
         raise ValueError("invalid sprite command")

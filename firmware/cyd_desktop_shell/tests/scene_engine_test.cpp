@@ -173,9 +173,21 @@ void overlay_shows_once() {
 
 }  // namespace
 
+// Memory the caller owns, as cyd.py's bytearrays: 8-byte aligned.
+alignas(8) uint8_t frame_memory[16 * 1024];
+alignas(8) uint8_t item_memory[scene::kItemChunks][4096];
+
 int main() {
     assert(present({}) == scene::kNotReady);
-    assert(scene::begin() && scene::ready());
+    assert(scene::frame_bytes() <= sizeof(frame_memory) && scene::item_chunk_bytes() <= sizeof(item_memory[0]));
+    // Every piece is small: nothing near the 10 KB a fragmented heap may lack.
+    assert(scene::frame_bytes() < 4096 && scene::item_chunk_bytes() < 4096);
+    void *items[scene::kItemChunks];
+    for (int i = 0; i < scene::kItemChunks; ++i) items[i] = item_memory[i];
+    assert(!scene::begin(frame_memory + 1, sizeof(frame_memory) - 1, items, sizeof(item_memory[0])));  // misaligned
+    assert(!scene::begin(frame_memory, scene::frame_bytes() - 1, items, sizeof(item_memory[0])));     // too small
+    assert(!scene::begin(frame_memory, sizeof(frame_memory), items, scene::item_chunk_bytes() - 1));
+    assert(scene::begin(frame_memory, sizeof(frame_memory), items, sizeof(item_memory[0])) && scene::ready());
     assert(!scene::set_image(-1, kSquare, 2, 2) && !scene::set_image(scene::kImageCapacity, kSquare, 2, 2));
     assert(!scene::set_image(0, kSquare, 0, 2) && !scene::set_image(0, kSquare, 321, 1));
     assert(scene::set_image(0, kSquare, 2, 2) && scene::set_image(1, kHole, 2, 2) && scene::set_image(2, kBar, 3, 1));
