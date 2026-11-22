@@ -9,6 +9,8 @@ target_sources(usermod_cyd_desktop_shell INTERFACE
     ${CMAKE_CURRENT_LIST_DIR}/mjp_native_app.cpp
     ${CMAKE_CURRENT_LIST_DIR}/tile_engine.cpp
     ${CMAKE_CURRENT_LIST_DIR}/phys_engine.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/scene_engine.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/screen_scene.cpp
     ${CMAKE_CURRENT_LIST_DIR}/shell_module.cpp
     ${CMAKE_CURRENT_LIST_DIR}/screen.cpp
     ${CMAKE_CURRENT_LIST_DIR}/screen_display.cpp

@@ -160,7 +160,7 @@ which starts at y = 212. Colors are RGB565 integers; use `cyd.rgb()` to create t
 
 | Name | Value |
 | --- | --- |
-| `cyd.API_LEVEL` | API level supplied by the firmware; currently 9 |
+| `cyd.API_LEVEL` | API level supplied by the firmware; currently 10 |
 | `cyd.BLACK` `cyd.NAVY` `cyd.BLUE` `cyd.GREEN` `cyd.CYAN` `cyd.RED` `cyd.MAGENTA` `cyd.ORANGE` `cyd.YELLOW` `cyd.WHITE` | RGB565 colors |
 | `cyd.GAME_PLAYER` `cyd.GAME_ENEMY` `cyd.GAME_BULLET` `cyd.GAME_SHOT` `cyd.GAME_SPARK` | Sprite kinds, 0–4 |
 | `cyd.TILE_FLIP_X` `cyd.TILE_FLIP_Y` `cyd.TILE_BEHIND` | `cyd.tile_sprite()` flags (1, 2, 4) |
@@ -169,6 +169,8 @@ which starts at y = 212. Colors are RGB565 integers; use `cyd.rgb()` to create t
 | `cyd.PHYS_CAP` `cyd.PHYS_STRIDE` | Body limit (48) and bytes per `cyd.phys_state()` record (40) |
 | `cyd.ALIGN_LEFT` `cyd.ALIGN_CENTER` `cyd.ALIGN_RIGHT` | `cyd.overlay_text()` alignment (0, 1, 2) |
 | `cyd.IMAGE_CAP` `cyd.OVERLAY_CAP` | Image limit (16) and overlay items per frame (24) |
+| `cyd.SPRITE_CAP` `cyd.SPRITE_ITEMS` `cyd.SPRITE_RECORD` | Scene sprite images (32), commands per frame (128), bytes per command (22) |
+| `cyd.BLEND_NORMAL` `cyd.BLEND_ADD` `cyd.BLEND_SUBTRACT` `cyd.BLEND_MULTIPLY` | `cyd.sprite_present()` blend modes (0–3) |
 | `cyd.HTTP_MAX_BYTES` | HTTP response size limit: 32,768 bytes |
 
 ### 3.2 Capacity limits
@@ -573,7 +575,7 @@ Return `sqrt(x*x + y*y)`.
 
 #### `cyd.features()` → `tuple`
 
-The sorted names of the features this firmware has: currently `"image"`, `"keyboard"`, `"overlay"`, `"phys"`, `"tile"`, `"touch_points"`,
+The sorted names of the features this firmware has: currently `"image"`, `"keyboard"`, `"overlay"`, `"phys"`, `"sprite"`, `"tile"`, `"touch_points"`,
 `"video"`, and `"wifi"` when the radio mode is Wi-Fi. Apps can check `"phys" in cyd.features()` before
 using a feature.
 
@@ -672,3 +674,58 @@ Draw a rectangle over the game frame; `fill=False` draws only its outline.
 
 Remove this frame's overlay items. Overlay items are drawn above the sprites and the score line and are
 also cleared by `cyd.game_frame()`. Up to 24 per frame, text and rectangles together.
+
+In an app that has not called `cyd.game_begin()`, overlay items go to the sprite scene of section 13 and
+are drawn in the next `cyd.sprite_present()` frame (switching to the scene view).
+
+## 13. Sprite scene (API level 10 and later)
+
+Full-screen frames (320×240, over the taskbar) of RGB565 sprites, rotated, scaled, mirrored, translucent and
+blended, drawn back to front. The calls and the command format match the Android (IS01 / 12HT) port's
+NSPR. There is no frame buffer: each `cyd.sprite_present()` is one frame, drawn and sent 16 rows at a time.
+The first `cyd.sprite_present()` switches to the scene view.
+
+```python
+import struct
+ship = cyd.sprite_load("ship.rgb", 32, 32)
+frame = bytearray(cyd.SPRITE_RECORD)
+angle = 0
+while cyd.update():
+    angle = (angle + 512) & 0xFFFF
+    struct.pack_into("<HhhHHHhhHBBH", frame, 0, ship, 160, 120, 256, 256, angle, 16, 16, 0, 255, 0, 0)
+    cyd.overlay_text(4, 4, "SPIN", cyd.WHITE)
+    cyd.sprite_present(frame, cyd.NAVY)
+```
+
+#### `cyd.sprite_load(name, width, height)` → `int`
+
+Load a headerless little-endian RGB565 sprite from the app's folder and return its id (0–31). Colour 0 is
+transparent; sprites are at most 320×240. The pixels live on the app's heap until the app ends. Errors
+are as for `cyd.load_image()` and are recorded in `cyd.last_error()`.
+
+#### `cyd.sprite_create(width, height, pixels=None)` → `int`
+
+Make a sprite from `width*height*2` bytes of RGB565, or a transparent one. The pixels are copied.
+
+#### `cyd.sprite_update(id, pixels)`
+
+Overwrite a sprite's pixels with the same number of bytes; shown from the next `cyd.sprite_present()`.
+
+#### `cyd.sprite_present(commands, clear=BLACK)` → `int`
+
+Draw one frame from `commands`: up to 128 records of 22 bytes, each `struct` `"<HhhHHHhhHBBH"`:
+
+| Field | Meaning |
+| --- | --- |
+| id, x, y | The sprite, and the screen point where its (centre_x, centre_y) lands |
+| scale_x, scale_y | Scale, 256 = 1x, 1–4096 |
+| angle | Clockwise angle, 65536 = one turn |
+| centre_x, centre_y | The image point it turns about (0–width, 0–height) |
+| depth | Smaller is nearer; equal depths keep their order |
+| alpha, blend | Opacity 0–255 (0 draws nothing); blend is a `cyd.BLEND_*` (normal, add, subtract, multiply) |
+| flags | Bit 0 mirrors left-right, bit 1 top-bottom |
+
+`clear` is the background colour. The overlay queued since the previous `cyd.sprite_present()` is drawn on
+top, and the queue then starts empty. Returns the number of records, or -1 once the scene view has been
+closed. An invalid record raises `ValueError` and leaves the previous frame on screen. Sixty-four rotated,
+scaled and blended 24×24 and 16×16 sprites run at about 10 fps on the board.

@@ -16,6 +16,10 @@ from _cyd_shell import (app_button, app_clear, app_event, app_log, app_primitive
                          phys_state as _phys_state,
                          game_image_set as _game_image_set, game_bitmap as _game_bitmap,
                          overlay_clear as _overlay_clear, overlay_add as _overlay_add,
+                         scene_begin as _scene_begin, scene_end as _scene_end, scene_image as _scene_image,
+                         scene_overlay_clear as _scene_overlay_clear,
+                         scene_overlay_add as _scene_overlay_add, scene_present as _scene_present,
+                         buffer_copy as _buffer_copy,
                           game_touch as _game_touch, runtime_keepalive,
                           runtime_ping as _runtime_ping,
                           video_begin as _video_begin, video_present as _video_present,
@@ -74,6 +78,7 @@ def _tile_release():
     _tile_end()
     _tile_buffers = None
     _images_release()
+    _scene_release()
 
 def _set_app_root(app_id):
     global _app_root, _ui_used, _video_used
@@ -145,8 +150,10 @@ def fill_circle(x, y, radius, color=WHITE):
 
 def game_begin(background_top=NAVY, background_bottom=BLACK, accent=CYAN):
     """Select the fixed-capacity, full game-area sprite renderer."""
+    global _game_mode
     _game_begin(int(background_top) & 0xFFFF, int(background_bottom) & 0xFFFF,
                 int(accent) & 0xFFFF)
+    _game_mode = True
     _mark_dirty()
 
 def game_frame(frame, score=0, lives=3, bombs=0):
@@ -656,6 +663,7 @@ KEY_RELEASED = 4
 
 _last_touch_down = False
 _key_tracking = False
+_game_mode = False
 _keys_previous = ()
 _key_edges = {}
 _last_error = None
@@ -663,8 +671,9 @@ _last_error = None
 
 def _compat_reset():
     """Forget the previous app's input edges and error (called per app start)."""
-    global _last_touch_down, _key_tracking, _keys_previous, _key_edges, _last_error
+    global _last_touch_down, _key_tracking, _keys_previous, _key_edges, _last_error, _game_mode
     _last_touch_down = False
+    _game_mode = False
     _key_tracking = False
     _keys_previous = ()
     _key_edges = {}
@@ -778,6 +787,7 @@ _FEATURE_FUNCS = (
     ("image", "load_image"),
     ("overlay", "overlay_text"),
     ("phys", "phys_step"),
+    ("sprite", "sprite_present"),
     ("tile", "tile_begin"),
     ("touch_points", "touch_points"),
     ("video", "video_begin"),
@@ -925,8 +935,19 @@ def game_bitmap(id, x, y, scale=100, flags=0):
     return result
 
 
+def _overlay_to_scene():
+    """Whether overlay calls go to the sprite scene rather than the game frame."""
+    if _game_mode:
+        return False
+    _scene_enter()
+    return True
+
+
 def overlay_clear():
-    """Remove this frame's overlay text and rectangles."""
+    """Remove the overlay text and rectangles queued for this frame."""
+    if _overlay_to_scene():
+        _scene_overlay_clear()
+        return
     _overlay_clear()
     _mark_dirty()
 
@@ -938,17 +959,144 @@ def overlay_text(x, y, value, color=WHITE, scale=1, shadow=0x0821, align=ALIGN_L
     right (0 for none), align ALIGN_LEFT / ALIGN_CENTER / ALIGN_RIGHT about x.
     False when the frame already has OVERLAY_CAP overlay items.
     """
-    result = _overlay_add(0, int(x), int(y), 0, 0, int(color) & 0xFFFF, str(value),
-                          int(scale), int(shadow) & 0xFFFF, int(align))
-    if result:
+    add = _scene_overlay_add if _overlay_to_scene() else _overlay_add
+    result = add(0, int(x), int(y), 0, 0, int(color) & 0xFFFF, str(value),
+                 int(scale), int(shadow) & 0xFFFF, int(align))
+    if result and add is _overlay_add:
         _mark_dirty()
     return result
 
 
 def overlay_rect(x, y, width, height, color=WHITE, fill=True):
     """Queue a filled (or, with fill=False, outlined) rectangle over the game frame."""
-    result = _overlay_add(1 if fill else 2, int(x), int(y), int(width), int(height),
-                          int(color) & 0xFFFF, None, 1, 0, 0)
-    if result:
+    add = _scene_overlay_add if _overlay_to_scene() else _overlay_add
+    result = add(1 if fill else 2, int(x), int(y), int(width), int(height),
+                 int(color) & 0xFFFF, None, 1, 0, 0)
+    if result and add is _overlay_add:
         _mark_dirty()
+    return result
+
+
+# ---- Sprite scene (API level 10) --------------------------------------------
+# The IS01 / 12HT port's NSPR calls: full-screen frames of RGB565 sprites,
+# rotated, scaled, mirrored and blended, back to front, with the overlay on
+# top. Each sprite_present() is one frame, drawn 16 rows at a time; the first
+# one switches to the full-screen scene view. Sprite pixels stay in the app's
+# heap until the app ends.
+
+SPRITE_CAP = 32
+SPRITE_ITEMS = 128
+SPRITE_RECORD = 22
+BLEND_NORMAL = 0
+BLEND_ADD = 1
+BLEND_SUBTRACT = 2
+BLEND_MULTIPLY = 3
+
+_sprites = [None] * SPRITE_CAP
+_scene_used = False
+_SCENE_ERRORS = {-1: "not enough memory for the scene", -5: "no scene view", -6: "display busy"}
+
+
+def _scene_release():
+    global _scene_used
+    _scene_end()
+    for slot in range(SPRITE_CAP):
+        _sprites[slot] = None
+    _scene_used = False
+
+
+def _scene_enter():
+    global _scene_used, _ui_used, _video_used, _dirty, _game_mode
+    if _scene_used:
+        return
+    result = _scene_begin()
+    if result == -1:
+        raise MemoryError(_SCENE_ERRORS[-1])
+    if result != 0:
+        raise OSError(_SCENE_ERRORS.get(result, str(result)))
+    _scene_used = True
+    _game_mode = False
+    _ui_used = True
+    _video_used = True  # a full-screen view: an error returns Home
+    _dirty = False
+
+
+def _sprite_store(pixels, width, height):
+    if None not in _sprites:
+        raise MemoryError("all %d sprite slots are in use" % SPRITE_CAP)
+    slot = _sprites.index(None)
+    if not _scene_image(slot, pixels, width, height):
+        raise ValueError("sprite size out of range")
+    _sprites[slot] = (pixels, width, height)
+    return slot
+
+
+def _sprite_size(width, height):
+    width, height = int(width), int(height)
+    if not 1 <= width <= 320 or not 1 <= height <= 240:
+        raise ValueError("sprite size out of range")
+    return width, height
+
+
+def sprite_load(name, width, height):
+    """Load a headerless little-endian RGB565 sprite from this app's folder.
+
+    Returns its id (0..SPRITE_CAP-1) for sprite_present(). Colour 0 is
+    transparent. Errors as for load_image(), recorded in last_error().
+    """
+    try:
+        width, height = _sprite_size(width, height)
+        pixels = bytearray(width * height * 2)
+        with open(_app_file(name), "rb") as source:
+            count = source.readinto(pixels)
+            extra = source.read(1)
+        if count != len(pixels) or extra:
+            raise OSError("%s is not %dx%d RGB565" % (name, width, height))
+        slot = _sprite_store(pixels, width, height)
+    except Exception as error:
+        _report(False, error)
+        raise
+    _report(True, "")
+    return slot
+
+
+def sprite_create(width, height, pixels=None):
+    """Make a sprite from width*height*2 bytes of RGB565, or a transparent one.
+
+    The pixels are copied; change them later with sprite_update().
+    """
+    width, height = _sprite_size(width, height)
+    buffer = bytearray(width * height * 2)
+    if pixels is not None:
+        _buffer_copy(buffer, pixels)
+    return _sprite_store(buffer, width, height)
+
+
+def sprite_update(id, pixels):
+    """Overwrite a sprite's pixels with the same number of bytes; shown from the next present."""
+    entry = _sprites[int(id)] if 0 <= int(id) < SPRITE_CAP else None
+    if entry is None:
+        raise ValueError("invalid sprite id")
+    _buffer_copy(entry[0], pixels)
+
+
+def sprite_present(commands, clear=BLACK):
+    """Draw a full-screen frame of up to SPRITE_ITEMS packed sprite commands.
+
+    Each SPRITE_RECORD-byte record is struct "<HhhHHHhhHBBH": id, x, y,
+    scale_x, scale_y (256 = 1x), angle (65536 = one clockwise turn), centre_x,
+    centre_y (the image point placed at x, y and turned about), depth (smaller
+    is nearer), alpha (0..255), blend (BLEND_*), flags (bit 0 mirrors left-
+    right, bit 1 top-bottom). clear is the background colour. The overlay
+    queued since the last present is drawn on top. Returns the record count,
+    or -1 once the scene view has left the screen.
+    """
+    _scene_enter()
+    result = _scene_present(commands, int(clear) & 0xFFFF)
+    if result == -2:
+        raise ValueError("invalid sprite command")
+    if result == -4:
+        return -1
+    if result < 0:
+        raise OSError(_SCENE_ERRORS.get(result, str(result)))
     return result

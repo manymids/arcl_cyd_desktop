@@ -28,6 +28,10 @@ class Shell:
         self.radio = "off"
         self.images = {}
         self.overlays = []
+        self.scene = None
+        self.scene_images = {}
+        self.scene_overlays = []
+        self.presented = []
 
     def game_touch(self):
         return self.touch
@@ -59,6 +63,37 @@ class Shell:
     def overlay_add(self, *args):
         self.overlays.append(args)
         return True
+
+    def scene_begin(self):
+        self.scene = "front"
+        return 0
+
+    def scene_end(self):
+        self.scene = None
+        self.scene_images = {}
+
+    def scene_image(self, slot, pixels, width, height):
+        if pixels is None:
+            self.scene_images.pop(slot, None)
+        else:
+            self.scene_images[slot] = (pixels, width, height)
+        return True
+
+    def scene_overlay_add(self, *args):
+        self.scene_overlays.append(args)
+        return True
+
+    def scene_present(self, records, background):
+        if self.scene != "front":
+            return -4
+        if len(records) % 22:
+            return -2
+        self.presented.append((bytes(records), background))
+        return len(records) // 22
+
+    def buffer_copy(self, destination, source):
+        assert len(destination) == len(source)
+        destination[:] = source
 
 
 shell = Shell()
@@ -190,12 +225,51 @@ def test_load_image():
 
 def test_overlay():
     shell.overlays = []
+    cyd.game_begin()
     assert cyd.overlay_text(160, 10, "HI", cyd.YELLOW, 2, align=cyd.ALIGN_CENTER)
     assert cyd.overlay_rect(0, 0, 10, 5, cyd.RED, fill=False)
     assert shell.overlays[0] == (0, 160, 10, 0, 0, cyd.YELLOW, "HI", 2, 0x0821, 1)
     assert shell.overlays[1] == (2, 0, 0, 10, 5, cyd.RED, None, 1, 0, 0)
     names = cyd.features()
     assert "image" in names and "overlay" in names
+
+
+def test_sprite_scene():
+    cyd._set_app_root("scenetest")
+    shell.scene_overlays = []
+    shell.presented = []
+    solid = struct.pack("<4H", 0xF800, 0xF800, 0xF800, 0xF800)
+    first = cyd.sprite_create(2, 2, solid)
+    blank = cyd.sprite_create(3, 1)
+    assert (first, blank) == (0, 1)
+    assert bytes(shell.scene_images[0][0]) == solid and bytes(shell.scene_images[1][0]) == bytes(6)
+    cyd.sprite_update(blank, struct.pack("<3H", 1, 2, 3))
+    assert bytes(shell.scene_images[1][0]) == struct.pack("<3H", 1, 2, 3)
+    for bad in [lambda: cyd.sprite_update(5, bytes(2)), lambda: cyd.sprite_update(blank, bytes(2)),
+                lambda: cyd.sprite_create(0, 2)]:
+        try:
+            bad()
+        except (ValueError, AssertionError):
+            pass
+        else:
+            raise AssertionError("accepted a bad sprite call")
+    # Outside game mode the overlay goes to the scene, which it enters.
+    assert cyd.overlay_text(4, 4, "SCORE") and shell.scene == "front"
+    record = struct.pack("<HhhHHHhhHBBH", first, 10, 10, 256, 256, 0, 1, 1, 0, 255, 0, 0)
+    assert cyd.sprite_present(record + record, cyd.NAVY) == 2
+    assert shell.presented[-1] == (record + record, cyd.NAVY)
+    assert shell.scene_overlays[0][6] == "SCORE"
+    try:
+        cyd.sprite_present(bytes(5))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a partial record must be refused")
+    shell.scene = "left"
+    assert cyd.sprite_present(record) == -1, "the view has left the screen"
+    assert "sprite" in cyd.features()
+    cyd._set_app_root("next")
+    assert shell.scene is None and cyd._sprites == [None] * cyd.SPRITE_CAP and not cyd._scene_used
 
 
 def main():

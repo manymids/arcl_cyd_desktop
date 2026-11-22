@@ -25,12 +25,13 @@ TESTS=(
   "json_buffer_test.cpp:"
   "json_parse_test.cpp:"
   "shell_state_test.cpp:shell_state.cpp"
-  "native_app_test.cpp:native_app.cpp native_registry.cpp raycast_demo.cpp mjp_native_app.cpp tile_engine.cpp"
+  "native_app_test.cpp:native_app.cpp native_registry.cpp raycast_demo.cpp mjp_native_app.cpp tile_engine.cpp scene_engine.cpp"
   "tile_engine_test.cpp:tile_engine.cpp"
   "keyboard_layout_test.cpp:keyboard_layout.cpp"
   "key_input_test.cpp:key_input.cpp"
   "dirty_rects_test.cpp:"
   "phys_engine_test.cpp:phys_engine.cpp"
+  "scene_engine_test.cpp:scene_engine.cpp"
 )
 
 failures=0

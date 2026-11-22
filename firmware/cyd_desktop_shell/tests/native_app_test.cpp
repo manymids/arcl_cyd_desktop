@@ -99,6 +99,13 @@ void flags_drive_shell_behaviour() {
     assert(has_flag(tiles->id, kAppScriptHosted));
     assert(has_flag(tiles->id, kAppFullScreen));
     assert(!has_flag(tiles->id, kAppLaunchable));
+
+    // cyd.sprite_present() likewise.
+    const NativeApp *scene = find_with_flag(kAppSceneSurface);
+    assert(scene != nullptr && scene != tiles);
+    assert(has_flag(scene->id, kAppScriptHosted));
+    assert(has_flag(scene->id, kAppFullScreen));
+    assert(!has_flag(scene->id, kAppLaunchable));
 }
 
 void apps_describe_their_own_controls() {

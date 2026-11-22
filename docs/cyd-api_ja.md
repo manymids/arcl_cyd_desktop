@@ -154,7 +154,7 @@ cyd.run()           # Home / Start / 長押しで抜ける
 
 | 名前 | 値 |
 |---|---|
-| `cyd.API_LEVEL` | ファームウェアが提供する API レベル（現在 9） |
+| `cyd.API_LEVEL` | ファームウェアが提供する API レベル（現在 10） |
 | `cyd.BLACK` `cyd.NAVY` `cyd.BLUE` `cyd.GREEN` `cyd.CYAN` `cyd.RED` `cyd.MAGENTA` `cyd.ORANGE` `cyd.YELLOW` `cyd.WHITE` | RGB565 の色 |
 | `cyd.GAME_PLAYER` `cyd.GAME_ENEMY` `cyd.GAME_BULLET` `cyd.GAME_SHOT` `cyd.GAME_SPARK` | スプライトの種類（0〜4） |
 | `cyd.TILE_FLIP_X` `cyd.TILE_FLIP_Y` `cyd.TILE_BEHIND` | `cyd.tile_sprite()` のフラグ（1、2、4） |
@@ -163,6 +163,8 @@ cyd.run()           # Home / Start / 長押しで抜ける
 | `cyd.PHYS_CAP` `cyd.PHYS_STRIDE` | 物体の数の上限（48）と `cyd.phys_state()` の 1 件のバイト数（40） |
 | `cyd.ALIGN_LEFT` `cyd.ALIGN_CENTER` `cyd.ALIGN_RIGHT` | `cyd.overlay_text()` の揃え（0、1、2） |
 | `cyd.IMAGE_CAP` `cyd.OVERLAY_CAP` | 画像の数（16）と 1 フレームのオーバーレイの数（24）の上限 |
+| `cyd.SPRITE_CAP` `cyd.SPRITE_ITEMS` `cyd.SPRITE_RECORD` | シーンのスプライト画像の数（32）、1 フレームの命令の数（128）、命令 1 件のバイト数（22） |
+| `cyd.BLEND_NORMAL` `cyd.BLEND_ADD` `cyd.BLEND_SUBTRACT` `cyd.BLEND_MULTIPLY` | `cyd.sprite_present()` の合成（0〜3） |
 | `cyd.HTTP_MAX_BYTES` | `cyd.http_get()` が受け取る本文の上限（32,768） |
 
 ### 3.2 上限
@@ -504,7 +506,7 @@ Android 版（IS01 / 12HT）の `cyd` と同じ名前・引数で使える補助
 `sqrt(x*x + y*y)` を返します。
 
 #### `cyd.features()` → `tuple`
-このファームウェアが持つ機能の名前を並べ替えて返します。いまは `"image"`、`"keyboard"`、`"overlay"`、`"phys"`、`"tile"`、`"touch_points"`、`"video"`、
+このファームウェアが持つ機能の名前を並べ替えて返します。いまは `"image"`、`"keyboard"`、`"overlay"`、`"phys"`、`"sprite"`、`"tile"`、`"touch_points"`、`"video"`、
 無線モードが Wi-Fi のときは `"wifi"`。アプリは `"phys" in cyd.features()` のように確かめてから使えます。
 
 #### `cyd.last_error()` → `str` または `None`
@@ -586,3 +588,53 @@ while cyd.update():
 #### `cyd.overlay_clear()`
 このフレームのオーバーレイを消します。オーバーレイはスプライトとスコア行の上に描かれ、`cyd.game_frame()` でも消えます。
 1 フレーム 24 個まで（文字と長方形の合計）。
+
+`cyd.game_begin()` を呼んでいないアプリでは、オーバーレイは 13 章のスプライトシーンに入り、次の `cyd.sprite_present()` の
+フレームに描かれます（そのときシーンの画面に切り替わります）。
+
+## 13. スプライトシーン（API レベル 10 以降）
+
+画面全体（320×240、タスクバーも覆う）に、RGB565 のスプライトを回転・拡大縮小・反転・半透明・合成付きで、
+奥から順に描きます。Android 版（IS01 / 12HT）の NSPR と同じ呼び方と命令の形式です。
+フレームバッファは持たず、1 回の `cyd.sprite_present()` で 1 フレームを 16 行ずつ描いて送ります。
+最初の `cyd.sprite_present()` でシーンの画面に切り替わります。
+
+```python
+import struct
+ship = cyd.sprite_load("ship.rgb", 32, 32)
+frame = bytearray(cyd.SPRITE_RECORD)
+angle = 0
+while cyd.update():
+    angle = (angle + 512) & 0xFFFF
+    struct.pack_into("<HhhHHHhhHBBH", frame, 0, ship, 160, 120, 256, 256, angle, 16, 16, 0, 255, 0, 0)
+    cyd.overlay_text(4, 4, "SPIN", cyd.WHITE)
+    cyd.sprite_present(frame, cyd.NAVY)
+```
+
+#### `cyd.sprite_load(name, width, height)` → `int`
+アプリのフォルダにあるヘッダなしのリトルエンディアン RGB565 を読み、スプライトの番号（0〜31）を返します。
+色 0 は透明です。大きさは 320×240 まで。画素はアプリのヒープに置かれ、アプリの終了で解放されます。
+エラーは `cyd.load_image()` と同じで、`cyd.last_error()` にも入ります。
+
+#### `cyd.sprite_create(width, height, pixels=None)` → `int`
+`width*height*2` バイトの RGB565 から（省略すると透明な）スプライトを作ります。画素はコピーされます。
+
+#### `cyd.sprite_update(id, pixels)`
+スプライトの画素を同じバイト数で書き換えます。次の `cyd.sprite_present()` から反映されます。
+
+#### `cyd.sprite_present(commands, clear=BLACK)` → `int`
+`commands` の命令（1 件 22 バイト、最大 128 件）で 1 フレームを描きます。1 件は `struct` の `"<HhhHHHhhHBBH"`:
+
+| 項目 | 意味 |
+|---|---|
+| id, x, y | スプライトの番号と、画像の (centre_x, centre_y) を置く画面座標 |
+| scale_x, scale_y | 倍率。256 が等倍、1〜4096 |
+| angle | 時計回りの角度。65536 で 1 周 |
+| centre_x, centre_y | 画像上の回転の中心（0〜幅、0〜高さ） |
+| depth | 小さいほど手前。同じ値は命令の順 |
+| alpha, blend | 不透明度 0〜255（0 は描かない）。合成は `cyd.BLEND_*`（通常・加算・減算・乗算） |
+| flags | bit 0 で左右、bit 1 で上下を反転 |
+
+`clear` は背景色。前の `cyd.sprite_present()` から積んだオーバーレイを一番上に描き、積んだ分は空になります。
+命令の数を返します。シーンの画面が閉じられた後は -1。正しくない命令があると `ValueError` で、画面は前のフレームのままです。
+24×24 と 16×16 のスプライト 64 個を回転・拡大・合成付きで描くと、約 10 fps です（実機で測定）。

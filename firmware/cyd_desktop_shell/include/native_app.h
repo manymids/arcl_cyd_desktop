@@ -70,6 +70,7 @@ enum AppFlags : uint8_t {
     kAppTileSurface = 1 << 3,    // the target of cyd.tile_begin() / cyd.tile_present()
     // render_tile paints all kScreenHeight rows: no taskbar and no overlays.
     kAppFullScreen = 1 << 4,
+    kAppSceneSurface = 1 << 5,   // the target of cyd.sprite_present()
 };
 
 // Glyph used for the Home launcher. Maps onto the shell's built-in icons.

@@ -25,6 +25,13 @@ extern "C" void cyd_desktop_game_draw_stats(int out[4]);
 extern "C" bool cyd_desktop_game_image_set(int slot, const uint16_t *pixels, int width, int height);
 extern "C" bool cyd_desktop_game_bitmap(int slot, int x, int y, int scale, int flags);
 extern "C" void cyd_desktop_overlay_clear(void);
+extern "C" int cyd_desktop_scene_begin(void);
+extern "C" void cyd_desktop_scene_end(void);
+extern "C" bool cyd_desktop_scene_image(int slot, const uint16_t *pixels, int width, int height);
+extern "C" void cyd_desktop_scene_overlay_clear(void);
+extern "C" bool cyd_desktop_scene_overlay_add(int kind, int x, int y, int width, int height, int color,
+                                              const char *value, int scale, int shadow, int align);
+extern "C" int cyd_desktop_scene_present(const uint8_t *records, size_t size, int background);
 extern "C" bool cyd_desktop_overlay_add(int kind, int x, int y, int width, int height, int color,
                                         const char *value, int scale, int shadow, int align);
 extern "C" void cyd_desktop_draw_triangle(int x0, int y0, int x1, int y1, int x2, int y2, int color, int wire);
@@ -253,6 +260,66 @@ mp_obj_t overlay_add(size_t, const mp_obj_t *args) {
                                                    mp_obj_get_int(args[9])));
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(overlay_add_obj, 10, 10, overlay_add);
+
+// Sprite scene (API level 10).
+mp_obj_t scene_begin() { return mp_obj_new_int(cyd_desktop_scene_begin()); }
+static MP_DEFINE_CONST_FUN_OBJ_0(scene_begin_obj, scene_begin);
+
+mp_obj_t scene_end() {
+    cyd_desktop_scene_end();
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(scene_end_obj, scene_end);
+
+// scene_image(slot, pixels_or_None, width, height): the caller keeps pixels alive.
+mp_obj_t scene_image(size_t, const mp_obj_t *args) {
+    const int slot = mp_obj_get_int(args[0]);
+    if (args[1] == mp_const_none) return mp_obj_new_bool(cyd_desktop_scene_image(slot, nullptr, 0, 0));
+    const int width = mp_obj_get_int(args[2]);
+    const int height = mp_obj_get_int(args[3]);
+    mp_buffer_info_t buffer;
+    mp_get_buffer_raise(args[1], &buffer, MP_BUFFER_READ);
+    if (width < 1 || height < 1 || buffer.len != static_cast<size_t>(width) * static_cast<size_t>(height) * 2 ||
+        (reinterpret_cast<uintptr_t>(buffer.buf) & 1u) != 0)
+        mp_raise_ValueError(MP_ERROR_TEXT("invalid RGB565 image"));
+    return mp_obj_new_bool(cyd_desktop_scene_image(slot, static_cast<const uint16_t *>(buffer.buf), width, height));
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(scene_image_obj, 4, 4, scene_image);
+
+mp_obj_t scene_overlay_clear() {
+    cyd_desktop_scene_overlay_clear();
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(scene_overlay_clear_obj, scene_overlay_clear);
+
+mp_obj_t scene_overlay_add(size_t, const mp_obj_t *args) {
+    const char *value = args[6] == mp_const_none ? nullptr : mp_obj_str_get_str(args[6]);
+    return mp_obj_new_bool(cyd_desktop_scene_overlay_add(mp_obj_get_int(args[0]), mp_obj_get_int(args[1]),
+                                                         mp_obj_get_int(args[2]), mp_obj_get_int(args[3]),
+                                                         mp_obj_get_int(args[4]), mp_obj_get_int(args[5]), value,
+                                                         mp_obj_get_int(args[7]), mp_obj_get_int(args[8]),
+                                                         mp_obj_get_int(args[9])));
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(scene_overlay_add_obj, 10, 10, scene_overlay_add);
+
+mp_obj_t scene_present(mp_obj_t records_obj, mp_obj_t background) {
+    mp_buffer_info_t records;
+    mp_get_buffer_raise(records_obj, &records, MP_BUFFER_READ);
+    return mp_obj_new_int(cyd_desktop_scene_present(static_cast<const uint8_t *>(records.buf), records.len,
+                                                    mp_obj_get_int(background)));
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(scene_present_obj, scene_present);
+
+// buffer_copy(destination, source): same-length byte copy, for sprite_update().
+mp_obj_t buffer_copy(mp_obj_t destination_obj, mp_obj_t source_obj) {
+    mp_buffer_info_t destination, source;
+    mp_get_buffer_raise(destination_obj, &destination, MP_BUFFER_WRITE);
+    mp_get_buffer_raise(source_obj, &source, MP_BUFFER_READ);
+    if (destination.len != source.len) mp_raise_ValueError(MP_ERROR_TEXT("buffer sizes differ"));
+    std::memmove(destination.buf, source.buf, source.len);
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(buffer_copy_obj, buffer_copy);
 
 // Physics (API level 8): the engine integrates and collides; Python places
 // bodies and draws what phys_state() reports.
@@ -597,6 +664,13 @@ const mp_rom_map_elem_t globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_game_bitmap), MP_ROM_PTR(&game_bitmap_obj)},
     {MP_ROM_QSTR(MP_QSTR_overlay_clear), MP_ROM_PTR(&overlay_clear_obj)},
     {MP_ROM_QSTR(MP_QSTR_overlay_add), MP_ROM_PTR(&overlay_add_obj)},
+    {MP_ROM_QSTR(MP_QSTR_scene_begin), MP_ROM_PTR(&scene_begin_obj)},
+    {MP_ROM_QSTR(MP_QSTR_scene_end), MP_ROM_PTR(&scene_end_obj)},
+    {MP_ROM_QSTR(MP_QSTR_scene_image), MP_ROM_PTR(&scene_image_obj)},
+    {MP_ROM_QSTR(MP_QSTR_scene_overlay_clear), MP_ROM_PTR(&scene_overlay_clear_obj)},
+    {MP_ROM_QSTR(MP_QSTR_scene_overlay_add), MP_ROM_PTR(&scene_overlay_add_obj)},
+    {MP_ROM_QSTR(MP_QSTR_scene_present), MP_ROM_PTR(&scene_present_obj)},
+    {MP_ROM_QSTR(MP_QSTR_buffer_copy), MP_ROM_PTR(&buffer_copy_obj)},
     {MP_ROM_QSTR(MP_QSTR_phys_reset), MP_ROM_PTR(&phys_reset_obj)},
     {MP_ROM_QSTR(MP_QSTR_phys_body), MP_ROM_PTR(&phys_body_obj)},
     {MP_ROM_QSTR(MP_QSTR_phys_velocity), MP_ROM_PTR(&phys_velocity_obj)},
