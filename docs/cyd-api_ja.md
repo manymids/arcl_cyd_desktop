@@ -154,10 +154,11 @@ cyd.run()           # Home / Start / 長押しで抜ける
 
 | 名前 | 値 |
 |---|---|
-| `cyd.API_LEVEL` | ファームウェアが提供する API レベル（現在 6） |
+| `cyd.API_LEVEL` | ファームウェアが提供する API レベル（現在 7） |
 | `cyd.BLACK` `cyd.NAVY` `cyd.BLUE` `cyd.GREEN` `cyd.CYAN` `cyd.RED` `cyd.MAGENTA` `cyd.ORANGE` `cyd.YELLOW` `cyd.WHITE` | RGB565 の色 |
 | `cyd.GAME_PLAYER` `cyd.GAME_ENEMY` `cyd.GAME_BULLET` `cyd.GAME_SHOT` `cyd.GAME_SPARK` | スプライトの種類（0〜4） |
 | `cyd.TILE_FLIP_X` `cyd.TILE_FLIP_Y` `cyd.TILE_BEHIND` | `cyd.tile_sprite()` のフラグ（1、2、4） |
+| `cyd.KEY_DOWN` `cyd.KEY_PRESSED` `cyd.KEY_RELEASED` | `cyd.key_state()` が返すビット（1、2、4） |
 | `cyd.HTTP_MAX_BYTES` | `cyd.http_get()` が受け取る本文の上限（32,768） |
 
 ### 3.2 上限
@@ -170,6 +171,7 @@ cyd.run()           # Home / Start / 長押しで抜ける
 | ボタン | 4 件 | `kAppButtonCapacity` |
 | 図形 | 48 件 | `kAppPrimitiveCapacity` |
 | ゲームスプライト | 128 件 | `kGameSpriteCapacity` |
+| ゲーム三角形 | 256 件 | `kGameTriangleCapacity` |
 | コンソール行 | 22 行 | `kConsoleMaxLines` |
 
 ### 3.3 基本の UI
@@ -205,6 +207,10 @@ cyd.run()           # Home / Start / 長押しで抜ける
 #### `cyd.circle(x, y, radius, color=WHITE, stroke=1)` → `bool`
 #### `cyd.fill_circle(x, y, radius, color=WHITE)` → `bool`
 
+#### `cyd.triangle(x0, y0, x1, y1, x2, y2, color=WHITE, fill=True)`
+#### `cyd.fill_triangle(x0, y0, x1, y1, x2, y2, color=WHITE)`
+三角形を描きます。`fill=False` で輪郭だけ。ほかの図形と違い、件数の上限が無く、戻り値もありません。
+
 ---
 
 ## 4. 更新ループ
@@ -234,8 +240,32 @@ cyd.run()           # Home / Start / 長押しで抜ける
 #### `cyd.game_sprite(kind, x, y, color=WHITE, size=3)` → `bool`
 スプライトを 1 つ置きます。`kind` は `cyd.GAME_*`、`size` は 1〜16。1 フレーム 128 個まで。
 
+#### `cyd.game_triangle(x0, y0, x1, y1, x2, y2, color=WHITE, wire=False)` → `bool`
+三角形を 1 つ置きます。スプライトより奥に描かれます。`wire=True` で輪郭だけを描きます。1 フレーム 256 個まで。
+
+#### `cyd.game_quad(x0, y0, x1, y1, x2, y2, x3, y3, color=WHITE, wire=False)` → `bool`
+四角形を三角形 2 つとして置きます。2 つとも置けたときだけ `True`。
+
+#### `cyd.game_sprites(records)` → `int`
+スプライトをまとめて置きます（API レベル 7 以降）。`records` は `struct.pack("<BhhHB", kind, x, y, color, size)` の
+8 バイトを並べたバッファです。置けた数を返します。長さが 8 の倍数でなければ `ValueError`。
+
+#### `cyd.game_draw_stats()` → `(sprites, triangles, dropped_sprites, dropped_triangles)`
+このフレームに置いたスプライトと三角形の数、上限で断られた数を返します（API レベル 7 以降）。
+どれも `cyd.game_frame()` で 0 に戻ります。
+
 #### `cyd.touch()` → `(pressed, x, y)`
 いまの物理タッチ状態を返します。ゲームループでの低遅延なポーリング用です。
+
+#### `cyd.touch_pressed()` → `(x, y)` または `None`
+押されている間はその座標、離れていれば `None`（API レベル 7 以降）。
+
+#### `cyd.touch_edge()` → `(x, y)` または `None`
+押し始めたときに 1 回だけ座標を返し、それ以外は `None`（API レベル 7 以降）。
+
+#### `cyd.touch_points()` → `tuple`
+押されている点を `((x, y, id), ...)` で返します（API レベル 7 以降）。CYD の抵抗膜パネルは 1 点だけなので、
+空か 1 個です。
 
 ### 5.1 タイルマップ（API レベル 5 以降）
 
@@ -375,6 +405,12 @@ Bluetooth キーボード（Settings > Wireless > KEYBOARD でペアリング）
 最後に押されている修飾キー `"SHIFT"`・`"CTRL"`・`"ALT"` が付きます。多くのキーボードは同時に 6 キーまで報告します。
 `desktop_key` で送ったキーは 250 ms の間押されているものとして報告します。
 
+#### `cyd.key_state(name, clear=True)` → `int`
+1 つのキーの状態を `cyd.KEY_DOWN`（押されている）・`cyd.KEY_PRESSED`（押された）・`cyd.KEY_RELEASED`（離された）の
+ビットで返します（API レベル 7 以降）。`name` は `cyd.keys_down()` の名前です（`"w"`、`" "`、`"LEFT"`、`"SHIFT"`）。
+押された・離されたは読むまで残り、`clear=False` なら読んでも残ります。最初に呼んだときから、呼ぶたびと
+`cyd.update()` のたびに押し離しを記録します。
+
 #### `cyd.keyboard_connected()` → `bool`
 Bluetooth キーボードが接続中なら `True`。
 
@@ -449,3 +485,21 @@ Wi-Fi の資格情報は `/sd/wifi.json`（`{"ssid": "...", "password": "..."}`�
 `http://` の GET を行い、本文を文字列で返します。`https://` は使えません。
 `timeout` は全体の秒数です。本文が `cyd.HTTP_MAX_BYTES` を超える場合と、ステータスが 2xx 以外の場合は
 `OSError`。待機中も Watchdog に通知します。
+
+## 10. 共通ヘルパー
+
+Android 版（IS01 / 12HT）の `cyd` と同じ名前・引数で使える補助です（API レベル 7 以降）。
+2 つの API レベルは別々に番号が進むので、アプリを移すときは `manifest.json` の `api` を CYD の番号にしてください。
+
+#### `cyd.screen_size()` → `(320, 240)`
+画面の大きさを返します。
+
+#### `cyd.hypot(x, y)` → `float`
+`sqrt(x*x + y*y)` を返します。
+
+#### `cyd.features()` → `tuple`
+このファームウェアが持つ機能の名前を並べ替えて返します。いまは `"keyboard"`、`"tile"`、`"touch_points"`、`"video"`、
+無線モードが Wi-Fi のときは `"wifi"`。アプリは `"phys" in cyd.features()` のように確かめてから使えます。
+
+#### `cyd.last_error()` → `str` または `None`
+直前の読み込み・初期化が失敗した理由。成功すると `None` に戻ります。アプリが始まるたびに `None` になります。

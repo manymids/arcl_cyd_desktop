@@ -13,6 +13,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 
@@ -72,6 +73,9 @@ struct GameSurface {
     uint8_t bombs;
     uint8_t sprite_count;
     uint16_t triangle_count;
+    // Calls refused this frame because the batch was full (game_draw_stats).
+    uint16_t dropped_sprites;
+    uint16_t dropped_triangles;
     GameSprite sprites[kGameSpriteCapacity];
     GameTriangle triangles[kGameTriangleCapacity];
 };
@@ -679,6 +683,8 @@ extern "C" void cyd_desktop_game_frame(uint32_t frame_number, uint32_t score, in
     game_surface.bombs = static_cast<uint8_t>(std::max(0, std::min(3, bombs)));
     game_surface.sprite_count = 0;
     game_surface.triangle_count = 0;
+    game_surface.dropped_sprites = 0;
+    game_surface.dropped_triangles = 0;
     taskEXIT_CRITICAL(&game_surface_lock);
 }
 
@@ -686,6 +692,7 @@ extern "C" bool cyd_desktop_game_sprite(int kind, int x, int y, int color, int s
     if (kind < 0 || kind > 4) return false;
     taskENTER_CRITICAL(&game_surface_lock);
     if (!game_surface.active || game_surface.sprite_count >= kGameSpriteCapacity) {
+        if (game_surface.active && game_surface.dropped_sprites < UINT16_MAX) ++game_surface.dropped_sprites;
         taskEXIT_CRITICAL(&game_surface_lock);
         return false;
     }
@@ -703,6 +710,7 @@ extern "C" bool cyd_desktop_game_triangle(int x0, int y0, int x1, int y1, int x2
                                           int color, int flags) {
     taskENTER_CRITICAL(&game_surface_lock);
     if (!game_surface.active || game_surface.triangle_count >= kGameTriangleCapacity) {
+        if (game_surface.active && game_surface.dropped_triangles < UINT16_MAX) ++game_surface.dropped_triangles;
         taskEXIT_CRITICAL(&game_surface_lock);
         return false;
     }
@@ -718,6 +726,17 @@ extern "C" bool cyd_desktop_game_triangle(int x0, int y0, int x1, int y1, int x2
     tri.reserved = 0;
     taskEXIT_CRITICAL(&game_surface_lock);
     return true;
+}
+
+// Queued sprites, queued triangles, then the calls refused because the frame's
+// batch was full. All four restart at zero with each game_frame().
+extern "C" void cyd_desktop_game_draw_stats(int out[4]) {
+    taskENTER_CRITICAL(&game_surface_lock);
+    out[0] = game_surface.sprite_count;
+    out[1] = game_surface.triangle_count;
+    out[2] = game_surface.dropped_sprites;
+    out[3] = game_surface.dropped_triangles;
+    taskEXIT_CRITICAL(&game_surface_lock);
 }
 
 extern "C" void cyd_desktop_draw_triangle(int x0, int y0, int x1, int y1, int x2, int y2,

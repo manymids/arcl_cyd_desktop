@@ -10,6 +10,7 @@ from _cyd_shell import (app_button, app_clear, app_event, app_log, app_primitive
                          runtime_no_limit as _runtime_no_limit,
                          game_frame as _game_frame, game_sprite as _game_sprite,
                          game_triangle as _game_triangle, draw_triangle as _draw_triangle,
+                         game_draw_stats as _game_draw_stats,
                           game_touch as _game_touch, runtime_keepalive,
                           runtime_ping as _runtime_ping,
                           video_begin as _video_begin, video_present as _video_present,
@@ -73,6 +74,7 @@ def _set_app_root(app_id):
     _tile_release()
     _ui_used = False
     _video_used = False
+    _compat_reset()
     _app_root = "/sd/apps/" + app_id + "/data"
     try:
         __import__("os").mkdir(_app_root)
@@ -439,6 +441,8 @@ def update():
     if _dirty:
         app_update()
         _dirty = False
+    if _key_tracking:
+        _poll_keys()
     if not runtime_keepalive():
         return False
     event = app_event()
@@ -633,3 +637,151 @@ def http_get(url, timeout=10):
         return body.decode("utf-8")
     finally:
         s.close()
+
+
+# ---- Helpers shared with the IS01 / 12HT port (API level 7) ----------------
+# Same names, arguments and results as the Android port's cyd module, so apps
+# move between them with fewer changes. The API levels of the two ports are
+# numbered independently.
+
+KEY_DOWN = 1
+KEY_PRESSED = 2
+KEY_RELEASED = 4
+
+_last_touch_down = False
+_key_tracking = False
+_keys_previous = ()
+_key_edges = {}
+_last_error = None
+
+
+def _compat_reset():
+    """Forget the previous app's input edges and error (called per app start)."""
+    global _last_touch_down, _key_tracking, _keys_previous, _key_edges, _last_error
+    _last_touch_down = False
+    _key_tracking = False
+    _keys_previous = ()
+    _key_edges = {}
+    _last_error = None
+
+
+def _report(ok, reason):
+    """Record why an init/load call failed, for last_error(). Returns ok."""
+    global _last_error
+    _last_error = None if ok else str(reason)
+    return ok
+
+
+def screen_size():
+    """Return (width, height) of the screen in pixels: always (320, 240)."""
+    return (320, 240)
+
+
+def hypot(x, y):
+    """Return the Euclidean norm sqrt(x*x + y*y)."""
+    x = float(x)
+    y = float(y)
+    return (x * x + y * y) ** 0.5
+
+
+def touch_pressed():
+    """Return (x, y) while the screen is touched, or None."""
+    pressed, x, y = _game_touch()
+    return (x, y) if pressed else None
+
+
+def touch_edge():
+    """Return (x, y) once when a touch starts, or None."""
+    global _last_touch_down
+    pressed, x, y = _game_touch()
+    if pressed and not _last_touch_down:
+        _last_touch_down = True
+        return (x, y)
+    if not pressed:
+        _last_touch_down = False
+    return None
+
+
+def touch_points():
+    """Return the active touches as ((x, y, id), ...). The CYD panel reports one."""
+    pressed, x, y = _game_touch()
+    return ((x, y, 0),) if pressed else ()
+
+
+def _poll_keys():
+    global _keys_previous
+    now = _keys_down()
+    for name in now:
+        if name not in _keys_previous:
+            _key_edges[name] = _key_edges.get(name, 0) | KEY_PRESSED
+    for name in _keys_previous:
+        if name not in now:
+            _key_edges[name] = _key_edges.get(name, 0) | KEY_RELEASED
+    _keys_previous = now
+
+
+def key_state(name, clear=True):
+    """Return KEY_DOWN / KEY_PRESSED / KEY_RELEASED bits for one key.
+
+    name is a cyd.keys_down() name ("w", " ", "LEFT", "SHIFT"). PRESSED and
+    RELEASED are remembered until read; clear=False reads them without
+    consuming them. Edges are tracked from the first call, at every call and
+    every cyd.update().
+    """
+    global _key_tracking
+    _key_tracking = True
+    _poll_keys()
+    name = str(name)
+    bits = _key_edges.get(name, 0)
+    if name in _keys_previous:
+        bits |= KEY_DOWN
+    if clear and name in _key_edges:
+        del _key_edges[name]
+    return bits
+
+
+def game_sprites(records):
+    """Queue packed <BhhHB sprite records (kind, x, y, color, size; 8 bytes each).
+
+    Returns how many were accepted; the rest count as dropped in game_draw_stats().
+    """
+    import struct
+    data = memoryview(records)
+    if len(data) % 8:
+        raise ValueError("records must be a multiple of 8 bytes")
+    accepted = 0
+    for offset in range(0, len(data), 8):
+        kind, x, y, color, size = struct.unpack_from("<BhhHB", data, offset)
+        if _game_sprite(kind, x, y, color, size):
+            accepted += 1
+    if accepted:
+        _mark_dirty()
+    return accepted
+
+
+def game_draw_stats():
+    """Return (sprites, triangles, dropped_sprites, dropped_triangles) for this frame."""
+    return _game_draw_stats()
+
+
+# (feature name, the function whose presence means the feature works here)
+_FEATURE_FUNCS = (
+    ("keyboard", "keyboard_connected"),
+    ("tile", "tile_begin"),
+    ("touch_points", "touch_points"),
+    ("video", "video_begin"),
+)
+
+
+def features():
+    """Return the sorted names of the optional features this firmware supports."""
+    g = globals()
+    names = [name for name, function in _FEATURE_FUNCS if function in g]
+    if wifi_enabled():
+        names.append("wifi")
+    return tuple(sorted(names))
+
+
+def last_error():
+    """Return why the last init/load call failed, or None."""
+    return _last_error

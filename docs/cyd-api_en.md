@@ -160,10 +160,11 @@ which starts at y = 212. Colors are RGB565 integers; use `cyd.rgb()` to create t
 
 | Name | Value |
 | --- | --- |
-| `cyd.API_LEVEL` | API level supplied by the firmware; currently 6 |
+| `cyd.API_LEVEL` | API level supplied by the firmware; currently 7 |
 | `cyd.BLACK` `cyd.NAVY` `cyd.BLUE` `cyd.GREEN` `cyd.CYAN` `cyd.RED` `cyd.MAGENTA` `cyd.ORANGE` `cyd.YELLOW` `cyd.WHITE` | RGB565 colors |
 | `cyd.GAME_PLAYER` `cyd.GAME_ENEMY` `cyd.GAME_BULLET` `cyd.GAME_SHOT` `cyd.GAME_SPARK` | Sprite kinds, 0–4 |
 | `cyd.TILE_FLIP_X` `cyd.TILE_FLIP_Y` `cyd.TILE_BEHIND` | `cyd.tile_sprite()` flags (1, 2, 4) |
+| `cyd.KEY_DOWN` `cyd.KEY_PRESSED` `cyd.KEY_RELEASED` | Bits returned by `cyd.key_state()` (1, 2, 4) |
 | `cyd.HTTP_MAX_BYTES` | HTTP response size limit: 32,768 bytes |
 
 ### 3.2 Capacity limits
@@ -177,6 +178,7 @@ raising an exception. Check their return values.
 | Buttons | 4 | `kAppButtonCapacity` |
 | Shapes | 48 | `kAppPrimitiveCapacity` |
 | Game sprites | 128 | `kGameSpriteCapacity` |
+| Game triangles | 256 | `kGameTriangleCapacity` |
 | Console lines | 22 | `kConsoleMaxLines` |
 
 ### 3.3 Basic UI
@@ -219,6 +221,12 @@ Convert three components in the range 0–255 to an RGB565 value.
 #### `cyd.circle(x, y, radius, color=WHITE, stroke=1)` → `bool`
 #### `cyd.fill_circle(x, y, radius, color=WHITE)` → `bool`
 
+#### `cyd.triangle(x0, y0, x1, y1, x2, y2, color=WHITE, fill=True)`
+#### `cyd.fill_triangle(x0, y0, x1, y1, x2, y2, color=WHITE)`
+
+Draw a triangle; `fill=False` draws only its outline. Unlike the other shapes these have no count limit
+and return nothing.
+
 ## 4. Update loop
 
 #### `cyd.update()` → `bool`
@@ -252,9 +260,41 @@ Start a new frame and clear the previous sprite batch. `lives` is 0–5 and `bom
 Add one sprite. `kind` is a `cyd.GAME_*` constant; `size` is 1–16.
 Up to 128 sprites can be submitted per frame.
 
+#### `cyd.game_triangle(x0, y0, x1, y1, x2, y2, color=WHITE, wire=False)` → `bool`
+
+Add one triangle, drawn behind the sprites. `wire=True` draws only its outline. Up to 256 per frame.
+
+#### `cyd.game_quad(x0, y0, x1, y1, x2, y2, x3, y3, color=WHITE, wire=False)` → `bool`
+
+Add a quadrilateral as two triangles. `True` only when both were accepted.
+
+#### `cyd.game_sprites(records)` → `int`
+
+Add many sprites at once (API level 7 and later). `records` holds 8-byte
+`struct.pack("<BhhHB", kind, x, y, color, size)` records. Returns how many were accepted; raises
+`ValueError` when the length is not a multiple of 8.
+
+#### `cyd.game_draw_stats()` → `(sprites, triangles, dropped_sprites, dropped_triangles)`
+
+The sprites and triangles queued this frame and how many were refused at the limits (API level 7 and
+later). All four restart at zero with `cyd.game_frame()`.
+
 #### `cyd.touch()` → `(pressed, x, y)`
 
 Return the current physical touch state for low-latency polling in a game loop.
+
+#### `cyd.touch_pressed()` → `(x, y)` or `None`
+
+The touch position while the screen is pressed, otherwise `None` (API level 7 and later).
+
+#### `cyd.touch_edge()` → `(x, y)` or `None`
+
+The position once, when a touch starts; otherwise `None` (API level 7 and later).
+
+#### `cyd.touch_points()` → `tuple`
+
+The active touches as `((x, y, id), ...)` (API level 7 and later). The CYD's resistive panel reports a
+single point, so this is empty or has one entry.
 
 ### 5.1 Tile map (API level 5 and later)
 
@@ -410,6 +450,13 @@ Characters come without modifiers (`"z"`, `"1"`, `" "` for space), other keys by
 (`"LEFT"`, `"ENTER"`), followed by any held modifier: `"SHIFT"`, `"CTRL"`, `"ALT"`. Most keyboards report
 up to six keys at once. A key sent with `desktop_key` counts as held for 250 ms.
 
+#### `cyd.key_state(name, clear=True)` → `int`
+
+One key's state as `cyd.KEY_DOWN` (held), `cyd.KEY_PRESSED` (went down) and `cyd.KEY_RELEASED` (went up)
+bits (API level 7 and later). `name` is a `cyd.keys_down()` name (`"w"`, `" "`, `"LEFT"`, `"SHIFT"`).
+PRESSED and RELEASED stay until read; `clear=False` reads them without consuming them. From the first
+call on, presses and releases are recorded at every call and every `cyd.update()`.
+
 #### `cyd.keyboard_connected()` → `bool`
 
 Return `True` while a Bluetooth keyboard is connected.
@@ -503,3 +550,27 @@ Perform an `http://` GET and return the body as a string. HTTPS is unsupported.
 `timeout` specifies the overall time budget in seconds. Raise `OSError` when the
 response exceeds `cyd.HTTP_MAX_BYTES` or the status is outside 2xx.
 Feed the Watchdog while waiting.
+
+## 10. Shared helpers
+
+Helpers with the same names and arguments as the Android (IS01 / 12HT) port's `cyd` (API level 7 and
+later). The two ports number their API levels independently: when moving an app, set `api` in
+`manifest.json` to the CYD level.
+
+#### `cyd.screen_size()` → `(320, 240)`
+
+The screen size in pixels.
+
+#### `cyd.hypot(x, y)` → `float`
+
+Return `sqrt(x*x + y*y)`.
+
+#### `cyd.features()` → `tuple`
+
+The sorted names of the features this firmware has: currently `"keyboard"`, `"tile"`, `"touch_points"`,
+`"video"`, and `"wifi"` when the radio mode is Wi-Fi. Apps can check `"phys" in cyd.features()` before
+using a feature.
+
+#### `cyd.last_error()` → `str` or `None`
+
+Why the last load or init call failed; `None` after a success and at the start of every app.

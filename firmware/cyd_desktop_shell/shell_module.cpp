@@ -20,6 +20,7 @@ extern "C" void cyd_desktop_game_begin(int background_top, int background_bottom
 extern "C" void cyd_desktop_game_frame(uint32_t frame_number, uint32_t score, int lives, int bombs);
 extern "C" bool cyd_desktop_game_sprite(int kind, int x, int y, int color, int size);
 extern "C" bool cyd_desktop_game_triangle(int x0, int y0, int x1, int y1, int x2, int y2, int color, int flags);
+extern "C" void cyd_desktop_game_draw_stats(int out[4]);
 extern "C" void cyd_desktop_draw_triangle(int x0, int y0, int x1, int y1, int x2, int y2, int color, int wire);
 extern "C" void cyd_desktop_game_touch(bool *pressed, int *x, int *y);
 extern "C" bool cyd_desktop_video_begin(void);
@@ -206,6 +207,15 @@ mp_obj_t game_triangle(size_t n_args, const mp_obj_t *args) {
     return mp_obj_new_bool(cyd_desktop_game_triangle(x0, y0, x1, y1, x2, y2, color, flags));
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(game_triangle_obj, 7, 8, game_triangle);
+
+mp_obj_t game_draw_stats() {
+    int stats[4]{};
+    cyd_desktop_game_draw_stats(stats);
+    mp_obj_t items[4];
+    for (int index = 0; index < 4; ++index) items[index] = mp_obj_new_int(stats[index]);
+    return mp_obj_new_tuple(4, items);
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(game_draw_stats_obj, game_draw_stats);
 
 mp_obj_t draw_triangle(size_t n_args, const mp_obj_t *args) {
     int x0 = mp_obj_get_int(args[0]);
@@ -494,6 +504,7 @@ const mp_rom_map_elem_t globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_game_frame), MP_ROM_PTR(&game_frame_obj)},
     {MP_ROM_QSTR(MP_QSTR_game_sprite), MP_ROM_PTR(&game_sprite_obj)},
     {MP_ROM_QSTR(MP_QSTR_game_triangle), MP_ROM_PTR(&game_triangle_obj)},
+    {MP_ROM_QSTR(MP_QSTR_game_draw_stats), MP_ROM_PTR(&game_draw_stats_obj)},
     {MP_ROM_QSTR(MP_QSTR_draw_triangle), MP_ROM_PTR(&draw_triangle_obj)},
     {MP_ROM_QSTR(MP_QSTR_game_touch), MP_ROM_PTR(&game_touch_obj)},
     {MP_ROM_QSTR(MP_QSTR_video_begin), MP_ROM_PTR(&video_begin_obj)},

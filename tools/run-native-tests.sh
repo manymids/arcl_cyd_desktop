@@ -67,6 +67,7 @@ done
 PY_TESTS=(
   "firmware/cyd_desktop_board/tests/manifest_test.py"
   "firmware/cyd_desktop_board/tests/app_scope_test.py"
+  "firmware/cyd_desktop_board/tests/cyd_compat_test.py"
 )
 for test in "${PY_TESTS[@]}"; do
   name="$(basename "$test" .py)"
