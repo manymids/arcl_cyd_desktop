@@ -674,6 +674,7 @@ Z バッファ付きの 3D を、13 章のスプライトシーンの下に描�
 変換・ニアクリップ・陰影・フォグの計算も同じです。フレームバッファは持たず、多角形を 16 行ずつ、1 帯分の Z バッファで描きます。
 数値は固定小数点です: 位置は Q16.16（-32768〜32768 の数はそのまま単位として扱う）、角度は 65536 で 1 周（小数はラジアン）。
 Android 版の星空・立体視・Starblade 用 HUD（`stars` / `stereo` / `targets` / `hud` / `label` / `rail_map`）はありません。
+N3D・スプライト・オーバーレイをまとめて使う例が `examples/scene_lab` です（`npm run install:scene`）。
 
 ```python
 cube = cyd.n3d_pack_model(verts, faces)          # (x, y, z) と (i0, i1, i2, i3, 色)

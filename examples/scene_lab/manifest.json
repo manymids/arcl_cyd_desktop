@@ -1,0 +1,7 @@
+{
+  "id": "scenelab",
+  "title": "SCENE LAB",
+  "entry": "main.py",
+  "api": 12,
+  "version": "0.1.0"
+}

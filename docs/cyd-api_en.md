@@ -771,7 +771,8 @@ clipping, shading and fog maths match the Android (IS01 / 12HT) port's `n3d_*`. 
 polygons are drawn 16 rows at a time with a Z buffer one band high. Numbers are fixed point: positions
 Q16.16 (numbers in -32768..32768 are taken as whole units), angles 65536 per turn (floats are radians).
 The Android port's stars, stereo and Starblade HUD (`stars` / `stereo` / `targets` / `hud` / `label` /
-`rail_map`) are not available.
+`rail_map`) are not available. `examples/scene_lab` (`npm run install:scene`) uses N3D, sprites and the
+overlay together.
 
 ```python
 cube = cyd.n3d_pack_model(verts, faces)          # (x, y, z) and (i0, i1, i2, i3, colour)

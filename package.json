@@ -22,6 +22,7 @@
     "install:canvas": "node bridge/deploy.mjs examples/canvas_fx --launch",
     "install:game": "node bridge/deploy.mjs examples/pixel_barrage --launch",
     "install:bounce": "node bridge/deploy.mjs examples/bounce_lab --launch",
+    "install:scene": "node bridge/deploy.mjs examples/scene_lab --launch",
     "install:movie": "node bridge/deploy.mjs examples/mjp_player --launch",
     "install:console": "node bridge/deploy.mjs examples/console --pin --launch",
     "update:movie": "node bridge/deploy.mjs examples/mjp_player",
