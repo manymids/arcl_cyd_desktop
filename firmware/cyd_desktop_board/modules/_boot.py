@@ -212,7 +212,7 @@ def _run_app(app_id):
         # owns a native surface the console cannot draw over, so it goes Home.
         try:
             import cyd
-            if cyd._video_used:
+            if cyd._video_used:  # also a tile map
                 raise RuntimeError("video surface")
             if output is None:
                 output = _Output(app_id)
@@ -223,6 +223,11 @@ def _run_app(app_id):
             runtime_fail()
     finally:
         # A second Ctrl+C must not skip releasing the watchdog.
+        try:
+            import cyd
+            cyd._tile_release()
+        except BaseException:
+            pass
         for _attempt in range(3):
             try:
                 runtime_end()

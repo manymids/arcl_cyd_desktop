@@ -67,10 +67,19 @@ bool keyboard_was_connected = false;
 int shown_keyboard_state = 0;
 TickType_t toast_until = 0;
 constexpr TickType_t kToastTicks = pdMS_TO_TICKS(3000);
+// desktop_key has no release, so cyd.keys_down() reports its key as held for
+// this long; enough for a game polling at 30 fps to see it.
+constexpr TickType_t kInjectedHoldTicks = pdMS_TO_TICKS(250);
+keys::Key injected_held{keys::kNone, 0};
+TickType_t injected_held_until = 0;
 
 bool next_key(keys::Key *key) {
     taskENTER_CRITICAL(&queue_lock);
     const bool from_protocol = injected.pop(key);
+    if (from_protocol) {
+        injected_held = *key;
+        injected_held_until = xTaskGetTickCount() + kInjectedHoldTicks;
+    }
     taskEXIT_CRITICAL(&queue_lock);
     if (from_protocol) return true;
     cyd_bt_key_t raw;
@@ -90,7 +99,8 @@ bool app_running() {
 bool overlay_allowed() {
     const auto snapshot = cyd::desktop::shell_state().snapshot();
     if (snapshot.view == cyd::desktop::View::Native) {
-        return !cyd::desktop::native::has_flag(snapshot.foreground_app, cyd::desktop::native::kAppVideoSurface);
+        return !cyd::desktop::native::has_flag(snapshot.foreground_app, cyd::desktop::native::kAppVideoSurface) &&
+               !cyd::desktop::native::has_flag(snapshot.foreground_app, cyd::desktop::native::kAppFullScreen);
     }
     return !(snapshot.view == cyd::desktop::View::Scripts && app_game_mode());
 }
@@ -111,7 +121,8 @@ void refresh_taskbar_status() {
     shown_keyboard_state = state;
     const auto snapshot = cyd::desktop::shell_state().snapshot();
     if (snapshot.view == cyd::desktop::View::Native &&
-        cyd::desktop::native::has_flag(snapshot.foreground_app, cyd::desktop::native::kAppVideoSurface)) return;
+        (cyd::desktop::native::has_flag(snapshot.foreground_app, cyd::desktop::native::kAppVideoSurface) ||
+         cyd::desktop::native::has_flag(snapshot.foreground_app, cyd::desktop::native::kAppFullScreen))) return;
     if (!lock_display()) return;
     clear_clip();
     fill_rect(254, kTaskbarY, 34, kHeight - kTaskbarY, kWallpaperTop);
@@ -201,6 +212,35 @@ extern "C" bool cyd_desktop_app_key_read(char *out, size_t capacity) {
     const bool found = app_keys.pop(&key);
     taskEXIT_CRITICAL(&queue_lock);
     return found && keys::name(key, out, capacity);
+}
+
+// Names of the keys held down, for cyd.keys_down(): characters as typed with no
+// modifier ("z", "1"), other keys by name ("LEFT"), then "SHIFT", "CTRL" and
+// "ALT". Only a running app sees them. Returns how many were written.
+extern "C" size_t cyd_desktop_app_keys_down(char names[][12], size_t capacity) {
+    if (!app_running() || cyd::desktop::shell_state().snapshot().view == cyd::desktop::View::Editor) return 0;
+    uint8_t usages[6];
+    uint8_t modifiers = 0;
+    const int count = cyd_desktop_bt_keys_down(usages, &modifiers);
+    size_t written = 0;
+    const auto layout = static_cast<keys::Layout>(keyboard_layout());
+    for (int index = 0; index < count && written < capacity; ++index) {
+        const keys::Key key = keys::translate(usages[index], 0, layout, false);
+        if (key.code != keys::kNone && key.code != keys::kCapsLock && keys::name(key, names[written], 12)) ++written;
+    }
+    taskENTER_CRITICAL(&queue_lock);
+    keys::Key held = injected_held;
+    const bool injected_active = held.code != keys::kNone && xTaskGetTickCount() < injected_held_until;
+    taskEXIT_CRITICAL(&queue_lock);
+    if (injected_active && written < capacity) {
+        held.modifiers = 0;
+        if (keys::name(held, names[written], 12)) ++written;
+    }
+    // HID modifier bits: left and right Ctrl, Shift, Alt.
+    if ((modifiers & 0x22) && written < capacity) std::snprintf(names[written++], 12, "SHIFT");
+    if ((modifiers & 0x11) && written < capacity) std::snprintf(names[written++], 12, "CTRL");
+    if ((modifiers & 0x44) && written < capacity) std::snprintf(names[written++], 12, "ALT");
+    return written;
 }
 
 extern "C" void cyd_desktop_app_keys_clear(void) {

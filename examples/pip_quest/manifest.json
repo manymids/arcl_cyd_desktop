@@ -1,0 +1,7 @@
+{
+  "id": "pipquest",
+  "title": "PIP QUEST",
+  "entry": "main.py",
+  "api": 5,
+  "version": "0.1.0"
+}

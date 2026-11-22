@@ -13,7 +13,11 @@ from _cyd_shell import (app_button, app_clear, app_event, app_log, app_primitive
                           game_touch as _game_touch, runtime_keepalive,
                           runtime_ping as _runtime_ping,
                           video_begin as _video_begin, video_present as _video_present,
-                          jpeg_present as _jpeg_present, jpeg_file as _jpeg_file)
+                          jpeg_present as _jpeg_present, jpeg_file as _jpeg_file,
+                          tile_begin as _tile_begin, tile_end as _tile_end, tile_palette as _tile_palette,
+                          tile_frame as _tile_frame, tile_sprite as _tile_sprite, tile_text as _tile_text,
+                          tile_rect as _tile_rect,
+                          tile_present as _tile_present, keys_down as _keys_down)
 from _manifest import API_LEVEL
 
 BLACK = 0x0000
@@ -40,6 +44,10 @@ GAME_BULLET = 2
 GAME_SHOT = 3
 GAME_SPARK = 4
 
+TILE_FLIP_X = 1
+TILE_FLIP_Y = 2
+TILE_BEHIND = 4
+
 _callbacks = {}
 _app_root = None
 _dirty = True
@@ -47,14 +55,22 @@ _dirty = True
 # shown on screen (see _boot.py).
 _ui_used = False
 _video_used = False
+# The buffers a tile scene points into; kept alive while the scene is set.
+_tile_buffers = None
 
 def _mark_dirty():
     global _dirty, _ui_used
     _dirty = True
     _ui_used = True
 
+def _tile_release():
+    global _tile_buffers
+    _tile_end()
+    _tile_buffers = None
+
 def _set_app_root(app_id):
     global _app_root, _ui_used, _video_used
+    _tile_release()
     _ui_used = False
     _video_used = False
     _app_root = "/sd/apps/" + app_id + "/data"
@@ -187,6 +203,81 @@ def video_present(jpeg):
     if result != 0:
         raise OSError(result)
     return True
+
+_TILE_ERRORS = {-1: "palette", -2: "tiles", -3: "sprites", -4: "map",
+                -5: "no tile surface", -6: "display busy"}
+
+def tile_begin(palette, tiles, sprites, tilemap, width, height, origin_y=0):
+    """Show a full-screen scrolling tile map with sprites (API level 5).
+
+    Cells are 16x16 at 4 bits per pixel (128 bytes each, high nibble first).
+    palette: 16 big-endian RGB565 colours per palette, 1-4 palettes. tiles: map
+    cells, colours from palette 0; tile 0 is empty. sprites: sprite cells, colour
+    0 transparent. tilemap: width*height tile numbers, row by row, drawn from
+    screen row origin_y. The buffers are used in place, so changing a byte of
+    tilemap changes the map; they must not be resized.
+    """
+    global _tile_buffers, _ui_used, _dirty, _video_used
+    result = _tile_begin(palette, tiles, sprites, tilemap, int(width), int(height), int(origin_y))
+    if result != 0:
+        raise ValueError("tile_begin: " + _TILE_ERRORS.get(result, str(result)))
+    _tile_buffers = (tiles, sprites, tilemap)
+    _ui_used = True
+    _video_used = True
+    _dirty = False
+    return True
+
+def tile_palette(palette):
+    """Replace the palettes of the tile scene; the count must not change."""
+    result = _tile_palette(palette)
+    if result != 0:
+        raise ValueError("tile_palette: " + _TILE_ERRORS.get(result, str(result)))
+
+def tile_frame(scroll_x, scroll_y=0):
+    """Start the next frame: scroll the map to world (x, y) and drop the sprites.
+
+    scroll_y needs API level 6.
+    """
+    _tile_frame(scroll_x, scroll_y)
+
+def tile_sprite(cell, x, y, flags=0):
+    """Add a sprite cell at screen (x, y); at most 64 a frame.
+
+    flags: TILE_FLIP_X, TILE_FLIP_Y, TILE_BEHIND, plus the palette number * 16.
+    """
+    return _tile_sprite(cell, x, y, flags)
+
+def tile_text(slot, x, y, value, color=1, scale=1):
+    """Set text slot 0-15 (0-7 before API level 6; 32 characters, palette 0
+    colour); "" removes it. Kept across frames."""
+    return _tile_text(int(slot), int(x), int(y), str(value), int(color), int(scale))
+
+def tile_rect(slot, x, y, width, height, fill=0, border=-1):
+    """Set rectangle slot 0-7 over the sprites and under the text (API level 6).
+
+    fill and border are palette 0 colours; border -1 draws none, otherwise a
+    2 pixel border with cut corners. Width or height 0 removes it. Kept across
+    frames.
+    """
+    return _tile_rect(int(slot), int(x), int(y), int(width), int(height), int(fill), int(border))
+
+def tile_present():
+    """Show the frame. False once the tile view has left the screen."""
+    result = _tile_present()
+    if result == -4:
+        return False
+    if result != 0:
+        raise OSError(result)
+    return True
+
+def keys_down():
+    """The hardware keyboard keys held down now, as a tuple of names (API level 5).
+
+    Characters without modifiers ("z", "1"), other keys as cyd.key() names
+    ("LEFT", "ENTER"), then "SHIFT", "CTRL", "ALT". Most keyboards report up to
+    six keys at once.
+    """
+    return _keys_down()
 
 def jpeg(source, x=-1, y=-1):
     """Decode and display a JPEG from a file path (str) or raw bytes.

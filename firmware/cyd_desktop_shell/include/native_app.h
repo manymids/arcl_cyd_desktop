@@ -7,6 +7,7 @@ namespace cyd::desktop::native {
 
 constexpr int kScreenWidth = 320;
 constexpr int kContentHeight = 212;
+constexpr int kScreenHeight = 240;
 
 constexpr uint16_t rgb565(uint8_t red, uint8_t green, uint8_t blue) {
     return static_cast<uint16_t>(((red & 0xf8) << 8) | ((green & 0xfc) << 3) | (blue >> 3));
@@ -66,6 +67,9 @@ enum AppFlags : uint8_t {
     kAppLaunchable = 1 << 0,     // may be started by id (Home launcher, desktop_launch)
     kAppScriptHosted = 1 << 1,   // a foreground MicroPython app drives this view
     kAppVideoSurface = 1 << 2,   // the target of cyd.video_begin() / cyd.video_present()
+    kAppTileSurface = 1 << 3,    // the target of cyd.tile_begin() / cyd.tile_present()
+    // render_tile paints all kScreenHeight rows: no taskbar and no overlays.
+    kAppFullScreen = 1 << 4,
 };
 
 // Glyph used for the Home launcher. Maps onto the shell's built-in icons.
