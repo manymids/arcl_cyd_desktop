@@ -179,6 +179,11 @@ def _run_app(app_id):
         app_log("Runtime unavailable")
         runtime_fail()
         return
+    # cyd is the desktop's own module and stays loaded; anything the app
+    # imports on top of it is dropped when the app ends.
+    import cyd
+    import _app_scope
+    scope = _app_scope.begin()
     output = None
     try:
         title, entry = _load_manifest(app_id)
@@ -226,6 +231,10 @@ def _run_app(app_id):
         try:
             import cyd
             cyd._tile_release()
+        except BaseException:
+            pass
+        try:
+            _app_scope.end(scope)
         except BaseException:
             pass
         for _attempt in range(3):

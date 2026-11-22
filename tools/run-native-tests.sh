@@ -66,6 +66,7 @@ done
 # Frozen MicroPython modules that are pure Python run under the host python3.
 PY_TESTS=(
   "firmware/cyd_desktop_board/tests/manifest_test.py"
+  "firmware/cyd_desktop_board/tests/app_scope_test.py"
 )
 for test in "${PY_TESTS[@]}"; do
   name="$(basename "$test" .py)"
